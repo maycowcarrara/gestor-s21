@@ -1,26 +1,41 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { db } from '../../config/firebase';
-import { collection, addDoc, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, Timestamp, doc, getDoc } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { Save, User, MapPin, Phone, Briefcase, Mail, Languages, Droplets } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 export default function NovoPublicador() {
     const { register, handleSubmit, watch, formState: { errors } } = useForm({
         defaultValues: {
             esperanca: "Outras Ovelhas",
             genero: "Masculino",
-            batizado: true, // Padrão mais comum, mas editável
+            batizado: true,
             pioneiro_tipo: "Nenhum"
         }
     });
     const [loading, setLoading] = useState(false);
+    const [listaGrupos, setListaGrupos] = useState(["Hípica", "Santuário", "Salão do Reino", "IDM/LS Palmas"]); // Fallback
     const navigate = useNavigate();
 
-    // Observa o checkbox para mostrar/esconder a data
-    const isBatizado = watch("batizado");
+    // Carrega grupos da configuração
+    useEffect(() => {
+        const fetchConfig = async () => {
+            try {
+                const docRef = doc(db, "config", "geral");
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists() && docSnap.data().grupos) {
+                    setListaGrupos(docSnap.data().grupos);
+                }
+            } catch (error) {
+                console.error("Erro ao carregar grupos:", error);
+            }
+        };
+        fetchConfig();
+    }, []);
 
-    const grupos = ["Hípica", "Santuário", "Salão do Reino", "IDM/LS Palmas"];
+    const isBatizado = watch("batizado");
 
     const onSubmit = async (data) => {
         setLoading(true);
@@ -31,10 +46,7 @@ export default function NovoPublicador() {
                     data_nascimento: data.data_nascimento || null,
                     genero: data.genero || "Masculino",
                     esperanca: data.esperanca,
-
-                    // Novo Campo: Idioma / Necessidade
                     outra_lingua: data.outra_lingua || null,
-
                     endereco: {
                         logradouro: data.endereco || null,
                         cidade: "Palmas",
@@ -48,15 +60,11 @@ export default function NovoPublicador() {
                     }
                 },
                 dados_eclesiasticos: {
-                    // Lógica de Batismo
-                    batizado: data.batizado, // Boolean
+                    batizado: data.batizado,
                     data_batismo: (data.batizado && data.data_batismo) ? data.data_batismo : null,
-
                     privilegios: data.privilegios || [],
-                    grupo_campo: data.grupo_campo || grupos[0],
-                    situacao: "Ativo", // Cria sempre como ativo
-
-                    // Pioneiro
+                    grupo_campo: data.grupo_campo || listaGrupos[0],
+                    situacao: "Ativo",
                     pioneiro_tipo: data.pioneiro_tipo !== "Nenhum" ? data.pioneiro_tipo : null,
                     data_designacao_pioneiro: data.data_inicio_pioneiro || null
                 },
@@ -70,20 +78,20 @@ export default function NovoPublicador() {
             };
 
             await addDoc(collection(db, "publicadores"), novoPublicador);
-            alert("Publicador cadastrado com sucesso!");
-            navigate('/');
+            toast.success("Publicador cadastrado com sucesso!");
+            navigate('/publicadores');
         } catch (error) {
             console.error("Erro ao salvar:", error);
-            alert("Erro ao salvar: " + error.message);
+            toast.error("Erro ao salvar: " + error.message);
         } finally {
             setLoading(false);
         }
     };
 
     return (
-        <div className="max-w-4xl mx-auto p-6">
+        <div className="max-w-4xl mx-auto p-4 md:p-6 pb-24">
             <h1 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-                <User className="w-6 h-6" /> Novo Registro de Publicador (S-21)
+                <User className="w-6 h-6 text-teocratico-blue" /> Novo Registro de Publicador (S-21)
             </h1>
 
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
@@ -112,7 +120,6 @@ export default function NovoPublicador() {
                             </select>
                         </div>
 
-                        {/* NOVA SEÇÃO DE IDIOMA */}
                         <div className="col-span-2 bg-indigo-50 p-3 rounded border border-indigo-100">
                             <label className="block text-sm font-medium text-indigo-900 mb-1 flex items-center gap-2">
                                 <Languages size={16} /> Outra Língua / Necessidade (Opcional)
@@ -126,18 +133,38 @@ export default function NovoPublicador() {
 
                         <div className="col-span-2 md:col-span-1">
                             <label className="block text-sm font-medium text-gray-700">Celular</label>
-                            <input {...register("celular")} className="mt-1 block w-full rounded-md border p-2" placeholder="(46) 9..." />
-                        </div>
-
-                        <div className="col-span-2 md:col-span-1">
-                            <label className="block text-sm font-medium text-gray-700">Endereço</label>
                             <div className="flex items-center">
-                                <MapPin className="w-4 h-4 mr-2 text-gray-400" />
-                                <input {...register("endereco")} className="mt-1 block w-full rounded-md border p-2" />
+                                <Phone size={16} className="text-gray-400 mr-2" />
+                                <input {...register("celular")} className="mt-1 block w-full rounded-md border p-2" placeholder="(46) 9..." />
                             </div>
                         </div>
 
-                        {/* E-mail e Emergência omitidos para economizar espaço visual aqui, mas mantenha se quiser */}
+                        <div className="col-span-2 md:col-span-1">
+                            <label className="block text-sm font-medium text-gray-700">E-mail</label>
+                            <div className="flex items-center">
+                                <Mail size={16} className="text-gray-400 mr-2" />
+                                <input {...register("email")} className="mt-1 block w-full rounded-md border p-2" placeholder="email@exemplo.com" />
+                            </div>
+                        </div>
+
+                        <div className="col-span-2">
+                            <label className="block text-sm font-medium text-gray-700">Endereço</label>
+                            <div className="flex items-center">
+                                <MapPin className="w-4 h-4 mr-2 text-gray-400" />
+                                <input {...register("endereco")} className="mt-1 block w-full rounded-md border p-2" placeholder="Rua, Número, Bairro" />
+                            </div>
+                        </div>
+
+                        <div className="col-span-2 grid grid-cols-2 gap-4 bg-gray-50 p-3 rounded">
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase">Contato Emergência (Nome)</label>
+                                <input {...register("emergencia_nome")} className="mt-1 block w-full rounded border p-1 text-sm bg-white" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase">Telefone Emergência</label>
+                                <input {...register("emergencia_tel")} className="mt-1 block w-full rounded border p-1 text-sm bg-white" />
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -149,7 +176,6 @@ export default function NovoPublicador() {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-                        {/* LÓGICA DE BATISMO */}
                         <div className="bg-blue-50 p-3 rounded border border-blue-100 col-span-2 md:col-span-1">
                             <label className="flex items-center gap-2 mb-2 font-medium text-blue-900 cursor-pointer">
                                 <input type="checkbox" {...register("batizado")} className="w-4 h-4 text-blue-600 rounded" />
@@ -175,7 +201,7 @@ export default function NovoPublicador() {
                         <div className="col-span-2">
                             <label className="block text-sm font-medium text-gray-700">Grupo de Campo</label>
                             <select {...register("grupo_campo")} className="mt-1 block w-full rounded-md border p-2 bg-yellow-50">
-                                {grupos.map(g => <option key={g} value={g}>{g}</option>)}
+                                {listaGrupos.map(g => <option key={g} value={g}>{g}</option>)}
                             </select>
                         </div>
 
@@ -187,7 +213,6 @@ export default function NovoPublicador() {
                             </div>
                         </div>
 
-                        {/* PIONEIROS - LABEL CORRETA */}
                         <div className="col-span-2 border-t pt-4 mt-2">
                             <label className="block text-sm font-medium text-gray-700 mb-2">Serviço de Pioneiro</label>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

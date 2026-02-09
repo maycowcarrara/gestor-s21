@@ -1,17 +1,34 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { db } from '../../config/firebase';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, getDoc } from 'firebase/firestore';
 import { X, User, Briefcase, AlertTriangle, Languages, Activity, Droplets } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function ModalEditarPublicador({ publicador, onClose, onSucesso }) {
     const [saving, setSaving] = useState(false);
+    const [listaGrupos, setListaGrupos] = useState(["Hípica", "Santuário", "Salão do Reino", "IDM/LS Palmas"]);
+
+    // Carrega grupos da configuração
+    useEffect(() => {
+        const fetchConfig = async () => {
+            try {
+                const docRef = doc(db, "config", "geral");
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists() && docSnap.data().grupos) {
+                    setListaGrupos(docSnap.data().grupos);
+                }
+            } catch (error) {
+                console.error("Erro ao carregar grupos:", error);
+            }
+        };
+        fetchConfig();
+    }, []);
 
     // Tenta inferir se é batizado pelos dados existentes
     const batizadoInicial = publicador.dados_eclesiasticos.batizado !== undefined
         ? publicador.dados_eclesiasticos.batizado
-        : !!publicador.dados_eclesiasticos.data_batismo; // Se tem data, é batizado
+        : !!publicador.dados_eclesiasticos.data_batismo;
 
     const { register, handleSubmit, watch } = useForm({
         defaultValues: {
@@ -26,7 +43,6 @@ export default function ModalEditarPublicador({ publicador, onClose, onSucesso }
             emergencia_nome: publicador.dados_pessoais.contatos?.emergencia_nome || "",
             emergencia_tel: publicador.dados_pessoais.contatos?.emergencia_tel || "",
 
-            // Teocráticos
             situacao: publicador.dados_eclesiasticos.situacao || "Ativo",
             grupo_campo: publicador.dados_eclesiasticos.grupo_campo,
             privilegios: publicador.dados_eclesiasticos.privilegios || [],
@@ -40,7 +56,6 @@ export default function ModalEditarPublicador({ publicador, onClose, onSucesso }
     });
 
     const isBatizado = watch("batizado");
-    const grupos = ["Hípica", "Santuário", "Salão do Reino", "IDM/LS Palmas"];
 
     const onSubmit = async (data) => {
         setSaving(true);
@@ -63,7 +78,6 @@ export default function ModalEditarPublicador({ publicador, onClose, onSucesso }
                 "dados_eclesiasticos.grupo_campo": data.grupo_campo,
                 "dados_eclesiasticos.situacao": data.situacao,
 
-                // Atualiza Batismo
                 "dados_eclesiasticos.batizado": data.batizado,
                 "dados_eclesiasticos.data_batismo": (data.batizado && data.data_batismo) ? data.data_batismo : null,
 
@@ -79,7 +93,7 @@ export default function ModalEditarPublicador({ publicador, onClose, onSucesso }
             onClose();
         } catch (error) {
             console.error(error);
-            toast.error("Erro ao salvar.");
+            toast.error("Erro ao atualizar.");
         } finally {
             setSaving(false);
         }
@@ -90,7 +104,7 @@ export default function ModalEditarPublicador({ publicador, onClose, onSucesso }
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
                 <div className="bg-teocratico-blue text-white p-4 flex justify-between items-center sticky top-0 z-10">
                     <h2 className="text-lg font-bold flex items-center gap-2"><User size={20} /> Editar Publicador</h2>
-                    <button onClick={onClose}><X size={20} /></button>
+                    <button onClick={onClose} className="hover:bg-blue-700 p-1 rounded transition"><X size={20} /></button>
                 </div>
 
                 <form onSubmit={handleSubmit(onSubmit)} className="p-6 space-y-6">
@@ -150,6 +164,18 @@ export default function ModalEditarPublicador({ publicador, onClose, onSucesso }
                             <label className="block text-sm font-medium text-gray-700">E-mail</label>
                             <input {...register("email")} className="w-full border p-2 rounded" />
                         </div>
+
+                        {/* EMERGÊNCIA */}
+                        <div className="col-span-2 grid grid-cols-2 gap-4 bg-gray-50 p-3 rounded">
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase">Contato Emergência (Nome)</label>
+                                <input {...register("emergencia_nome")} className="mt-1 block w-full rounded border p-1 text-sm bg-white" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase">Telefone Emergência</label>
+                                <input {...register("emergencia_tel")} className="mt-1 block w-full rounded border p-1 text-sm bg-white" />
+                            </div>
+                        </div>
                     </div>
 
                     <div className="border-t"></div>
@@ -159,7 +185,7 @@ export default function ModalEditarPublicador({ publicador, onClose, onSucesso }
                     </h3>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {/* BATISMO EDITÁVEL */}
+
                         <div className="bg-blue-50 p-3 rounded border border-blue-100 col-span-2 md:col-span-1">
                             <label className="flex items-center gap-2 mb-2 font-medium text-blue-900 cursor-pointer">
                                 <input type="checkbox" {...register("batizado")} className="w-4 h-4 text-blue-600 rounded" />
@@ -176,7 +202,7 @@ export default function ModalEditarPublicador({ publicador, onClose, onSucesso }
                         <div>
                             <label className="block text-sm font-medium text-gray-700">Grupo</label>
                             <select {...register("grupo_campo")} className="w-full border p-2 rounded bg-yellow-50">
-                                {grupos.map(g => <option key={g} value={g}>{g}</option>)}
+                                {listaGrupos.map(g => <option key={g} value={g}>{g}</option>)}
                             </select>
                         </div>
 
@@ -203,9 +229,9 @@ export default function ModalEditarPublicador({ publicador, onClose, onSucesso }
                         </div>
                     </div>
 
-                    <div className="flex justify-end gap-3 pt-4 border-t">
-                        <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-100 rounded">Cancelar</button>
-                        <button type="submit" disabled={saving} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                    <div className="flex justify-end gap-3 pt-4 border-t sticky bottom-0 bg-white pb-2">
+                        <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-100 rounded hover:bg-gray-200 transition">Cancelar</button>
+                        <button type="submit" disabled={saving} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition">
                             {saving ? "Salvando..." : "Salvar Alterações"}
                         </button>
                     </div>

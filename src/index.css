@@ -16,3 +16,49 @@ body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+/* --- CORREÇÃO DE TAMANHO DE FONTE MOBILE --- */
+
+/* No celular, reduz o tamanho base da fonte para 14px em vez de 16px */
+html {
+  font-size: 14px;
+}
+
+/* Em tablets e PC, volta ao normal (16px) */
+@media (min-width: 768px) {
+  html {
+    font-size: 16px;
+  }
+}
+
+/* Garante que os inputs não deem zoom no iOS (precisam ser 16px reais) */
+input,
+select,
+textarea {
+  font-size: 16px !important;
+}
+
+@media print {
+
+  aside,
+  nav,
+  .md\:hidden,
+  button {
+    display: none !important;
+  }
+
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+
+  body {
+    background: white;
+  }
+
+  /* Força quebra de página */
+  .print\:break-after-page {
+    page-break-after: always;
+  }
+}
