@@ -1,7 +1,7 @@
 {
   "name": "gestor-s21",
   "private": true,
-  "version": "1.2.15",
+  "version": "1.2.16",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,6 +13,9 @@
   "dependencies": {
     "date-fns": "^4.1.0",
     "firebase": "^12.9.0",
+    "jspdf": "^4.1.0",
+    "jspdf-autotable": "^5.0.7",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.563.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
