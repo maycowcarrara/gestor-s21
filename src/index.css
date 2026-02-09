@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+/* Configuração do tema (v4 detecta seu tailwind.config.js automaticamente) */
+@theme {
+  --color-teocratico-blue: #4a6da7;
+  --color-teocratico-lightBlue: #eef2fa;
+  --color-teocratico-gray: #f5f5f5;
+  --color-teocratico-dark: #1f2937;
+  --color-teocratico-red: #dc2626;
+  --color-teocratico-green: #16a34a;
+}
+
+body {
+  background-color: var(--color-teocratico-gray);
+  color: var(--color-teocratico-dark);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
