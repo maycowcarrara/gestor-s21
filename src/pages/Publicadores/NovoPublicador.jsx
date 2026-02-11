@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form';
 import { db } from '../../config/firebase';
 import { collection, addDoc, Timestamp, doc, getDoc } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
-import { Save, User, MapPin, Phone, Briefcase, Mail, Languages, Droplets } from 'lucide-react';
+import { Save, User, MapPin, Phone, Briefcase, Mail, Languages, Droplets, Calendar } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function NovoPublicador() {
@@ -16,7 +16,7 @@ export default function NovoPublicador() {
         }
     });
     const [loading, setLoading] = useState(false);
-    const [listaGrupos, setListaGrupos] = useState(["Hípica", "Santuário", "Salão do Reino", "IDM/LS Palmas"]); // Fallback
+    const [listaGrupos, setListaGrupos] = useState(["Hípica", "Santuário", "Salão do Reino", "IDM/LS Palmas"]);
     const navigate = useNavigate();
 
     // Carrega grupos da configuração
@@ -62,6 +62,9 @@ export default function NovoPublicador() {
                 dados_eclesiasticos: {
                     batizado: data.batizado,
                     data_batismo: (data.batizado && data.data_batismo) ? data.data_batismo : null,
+                    // CAMPO NOVO:
+                    data_inicio: data.data_inicio || null,
+
                     privilegios: data.privilegios || [],
                     grupo_campo: data.grupo_campo || listaGrupos[0],
                     situacao: "Ativo",
@@ -183,11 +186,26 @@ export default function NovoPublicador() {
                             </label>
 
                             {isBatizado && (
-                                <div className="animate-in fade-in slide-in-from-top-1">
-                                    <label className="block text-xs text-gray-600 mb-1">Data de Batismo (Opcional)</label>
+                                <div className="animate-in fade-in slide-in-from-top-1 mb-3">
+                                    <label className="block text-xs text-gray-600 mb-1 font-bold">Data de Batismo (Opcional)</label>
                                     <input type="date" {...register("data_batismo")} className="w-full border p-2 rounded text-sm bg-white" />
                                 </div>
                             )}
+
+                            {/* --- CAMPO NOVO: INÍCIO NA CONGREGAÇÃO --- */}
+                            <div className="border-t border-blue-200 pt-3 mt-2">
+                                <label className="block text-xs font-bold text-blue-800 mb-1 flex items-center gap-1">
+                                    <Calendar size={14} /> Início na Congregação
+                                </label>
+                                <input
+                                    type="date"
+                                    {...register("data_inicio")}
+                                    className="w-full border p-2 rounded text-sm bg-white focus:ring-2 focus:ring-green-400 outline-none"
+                                />
+                                <p className="text-[10px] text-blue-600 mt-1 leading-tight">
+                                    Use esta data para que o sistema não cobre relatórios anteriores à chegada do publicador.
+                                </p>
+                            </div>
                         </div>
 
                         <div>
@@ -200,16 +218,16 @@ export default function NovoPublicador() {
 
                         <div className="col-span-2">
                             <label className="block text-sm font-medium text-gray-700">Grupo de Campo</label>
-                            <select {...register("grupo_campo")} className="mt-1 block w-full rounded-md border p-2 bg-yellow-50">
+                            <select {...register("grupo_campo")} className="mt-1 block w-full rounded-md border p-2 bg-yellow-50 font-medium">
                                 {listaGrupos.map(g => <option key={g} value={g}>{g}</option>)}
                             </select>
                         </div>
 
                         <div className="col-span-2">
                             <label className="block text-sm font-medium text-gray-700 mb-2">Designação</label>
-                            <div className="flex gap-4">
-                                <label className="flex items-center space-x-2"><input type="checkbox" value="Ancião" {...register("privilegios")} className="rounded text-blue-600" /><span>Ancião</span></label>
-                                <label className="flex items-center space-x-2"><input type="checkbox" value="Servo Ministerial" {...register("privilegios")} className="rounded text-blue-600" /><span>Servo Ministerial</span></label>
+                            <div className="flex gap-4 bg-gray-50 p-3 rounded">
+                                <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" value="Ancião" {...register("privilegios")} className="rounded text-blue-600" /><span>Ancião</span></label>
+                                <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" value="Servo Ministerial" {...register("privilegios")} className="rounded text-blue-600" /><span>Servo Ministerial</span></label>
                             </div>
                         </div>
 
@@ -223,13 +241,13 @@ export default function NovoPublicador() {
                                     <option value="Missionário">Missionário</option>
                                 </select>
 
-                                <input type="date" {...register("data_inicio_pioneiro")} className="block w-full rounded-md border p-2" />
+                                <input type="date" {...register("data_inicio_pioneiro")} className="block w-full rounded-md border p-2" title="Data de início no serviço de pioneiro" />
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white py-3 rounded-md hover:bg-blue-700 flex justify-center items-center gap-2 shadow">
+                <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white py-3 rounded-md hover:bg-blue-700 flex justify-center items-center gap-2 shadow-lg transition transform hover:scale-[1.01]">
                     {loading ? "Salvando..." : <><Save size={20} /> Salvar Registro S-21</>}
                 </button>
             </form>

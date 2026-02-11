@@ -2,14 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { db } from '../../config/firebase';
 import { doc, updateDoc, getDoc } from 'firebase/firestore';
-import { X, User, Briefcase, AlertTriangle, Languages, Activity, Droplets } from 'lucide-react';
+import { X, User, Briefcase, AlertTriangle, Languages, Activity, Droplets, Calendar } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function ModalEditarPublicador({ publicador, onClose, onSucesso }) {
     const [saving, setSaving] = useState(false);
     const [listaGrupos, setListaGrupos] = useState(["Hípica", "Santuário", "Salão do Reino", "IDM/LS Palmas"]);
 
-    // Carrega grupos da configuração
     useEffect(() => {
         const fetchConfig = async () => {
             try {
@@ -25,7 +24,6 @@ export default function ModalEditarPublicador({ publicador, onClose, onSucesso }
         fetchConfig();
     }, []);
 
-    // Tenta inferir se é batizado pelos dados existentes
     const batizadoInicial = publicador.dados_eclesiasticos.batizado !== undefined
         ? publicador.dados_eclesiasticos.batizado
         : !!publicador.dados_eclesiasticos.data_batismo;
@@ -49,6 +47,9 @@ export default function ModalEditarPublicador({ publicador, onClose, onSucesso }
 
             batizado: batizadoInicial,
             data_batismo: publicador.dados_eclesiasticos.data_batismo || "",
+            
+            // CAMPO NOVO
+            data_inicio: publicador.dados_eclesiasticos.data_inicio || "",
 
             pioneiro_tipo: publicador.dados_eclesiasticos.pioneiro_tipo || "Nenhum",
             data_inicio_pioneiro: publicador.dados_eclesiasticos.data_designacao_pioneiro || ""
@@ -80,6 +81,9 @@ export default function ModalEditarPublicador({ publicador, onClose, onSucesso }
 
                 "dados_eclesiasticos.batizado": data.batizado,
                 "dados_eclesiasticos.data_batismo": (data.batizado && data.data_batismo) ? data.data_batismo : null,
+                
+                // SALVA CAMPO NOVO
+                "dados_eclesiasticos.data_inicio": data.data_inicio || null,
 
                 "dados_eclesiasticos.privilegios": data.privilegios,
                 "dados_eclesiasticos.pioneiro_tipo": data.pioneiro_tipo !== "Nenhum" ? data.pioneiro_tipo : null,
@@ -192,11 +196,26 @@ export default function ModalEditarPublicador({ publicador, onClose, onSucesso }
                                 <Droplets size={16} /> Publicador Batizado?
                             </label>
                             {isBatizado && (
-                                <div>
+                                <div className="mb-3">
                                     <label className="block text-xs text-gray-600 mb-1">Data (Se souber)</label>
                                     <input type="date" {...register("data_batismo")} className="w-full border p-2 rounded text-sm bg-white" />
                                 </div>
                             )}
+
+                            {/* --- CAMPO NOVO: INÍCIO NA CONGREGAÇÃO --- */}
+                            <div className="border-t border-blue-200 pt-3 mt-2">
+                                <label className="block text-xs font-bold text-blue-800 mb-1 flex items-center gap-1">
+                                    <Calendar size={14} /> Início na Congregação
+                                </label>
+                                <input 
+                                    type="date" 
+                                    {...register("data_inicio")} 
+                                    className="w-full border p-2 rounded text-sm bg-white focus:ring-2 focus:ring-green-400 outline-none" 
+                                />
+                                <p className="text-[10px] text-blue-600 mt-1 leading-tight">
+                                    Importante para filtrar relatórios antigos.
+                                </p>
+                            </div>
                         </div>
 
                         <div>

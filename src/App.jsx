@@ -15,8 +15,11 @@ import DetalhesPublicador from './pages/Publicadores/DetalhesPublicador';
 import ControleAssistencia from './pages/Reunioes/ControleAssistencia';
 import VisaoGeralRelatorios from './pages/Relatorios/VisaoGeralRelatorios';
 import RelatorioS1 from './pages/Relatorios/RelatorioS1';
-import ImpressaoLote from './pages/Relatorios/ImpressaoLote'; // <--- NOVA IMPORTAÇÃO
+import ImpressaoLote from './pages/Relatorios/ImpressaoLote';
 import Configuracoes from './pages/Configuracoes/Configuracoes';
+
+import ImportarDados from './pages/Admin/ImportarDados';
+import ImportarRelatorios from './pages/Admin/ImportarRelatorios';
 
 // --- COMPONENTES AUXILIARES ---
 
@@ -139,6 +142,9 @@ export default function App() {
 
           <Route path="/reunioes" element={<PrivateRoute><LayoutSistema><ControleAssistencia /></LayoutSistema></PrivateRoute>} />
           <Route path="/configuracoes" element={<PrivateRoute><LayoutSistema><Configuracoes /></LayoutSistema></PrivateRoute>} />
+          
+          <Route path="/importar-temp" element={<PrivateRoute><ImportarDados /></PrivateRoute>} />
+          <Route path="/importar-historico" element={<PrivateRoute><ImportarRelatorios /></PrivateRoute>} />
 
           {/* ROTA SEM SIDEBAR (Para Impressão Limpa) */}
           <Route path="/impressao-lote" element={<PrivateRoute><ImpressaoLote /></PrivateRoute>} />
