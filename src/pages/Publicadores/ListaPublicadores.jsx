@@ -2,8 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { db } from '../../config/firebase';
 import { collection, query, orderBy, getDocs, doc, getDoc } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
-import { Search, UserPlus, Users, ChevronRight, ChevronDown, ChevronUp, Briefcase, Shield, User, X, Filter, Baby, Glasses, UserCheck, Droplets } from 'lucide-react';
+import { 
+    Search, UserPlus, Users, ChevronRight, ChevronDown, ChevronUp, 
+    Briefcase, Shield, User, X, Filter, Baby, Glasses, UserCheck, 
+    Droplets, Printer, FileSpreadsheet, CheckCircle // Adicionei CheckCircle
+} from 'lucide-react';
 import { calcularFaixaEtaria } from '../../utils/helpers';
+// Importação das funções de exportação
+import { gerarPDFListaCompleta, gerarExcelListaCompleta } from '../../utils/geradorPDF';
 
 export default function ListaPublicadores() {
     const [publicadores, setPublicadores] = useState([]);
@@ -22,7 +28,7 @@ export default function ListaPublicadores() {
     const [filtroGrupo, setFiltroGrupo] = useState("todos");
     const [filtroSituacao, setFiltroSituacao] = useState("Ativo");
     const [filtroGenero, setFiltroGenero] = useState("todos");
-    const [filtroBatismo, setFiltroBatismo] = useState("todos"); // NOVO
+    const [filtroBatismo, setFiltroBatismo] = useState("todos");
 
     useEffect(() => {
         carregarPublicadores();
@@ -70,7 +76,7 @@ export default function ListaPublicadores() {
 
         if (filtroGenero !== 'todos' && pub.dados_pessoais.genero !== filtroGenero) return false;
 
-        // Filtro Não Batizado
+        // Filtro Batismo (Corrigido e Expandido)
         if (filtroBatismo === 'nao_batizado') {
             if (pub.dados_eclesiasticos.batizado) return false;
         }
@@ -81,15 +87,27 @@ export default function ListaPublicadores() {
             if (filtroTipo === 'pioneiro_regular' && tipo !== 'Pioneiro Regular') return false;
         }
 
+        // Filtro Privilégios (Atualizado para Varão Habilitado)
         if (filtroPrivilegio !== 'todos') {
             const privs = pub.dados_eclesiasticos.privilegios || [];
             if (filtroPrivilegio === 'anciao' && !privs.includes('Ancião')) return false;
             if (filtroPrivilegio === 'servo' && !privs.includes('Servo Ministerial')) return false;
+            if (filtroPrivilegio === 'varao' && !privs.includes('Varão Habilitado')) return false; // NOVO
         }
 
+        // Filtro Faixa Etária (Blindado)
         if (filtroFaixa !== 'todos') {
             const faixa = calcularFaixaEtaria(pub.dados_pessoais.data_nascimento);
-            if (!faixa || faixa.label.toLowerCase() !== filtroFaixa) return false;
+            // Se não tiver data de nascimento, não entra em nenhuma faixa
+            if (!faixa) return false;
+            
+            // Compara o slug ou label lowercase para evitar erros de acento
+            const labelLower = faixa.label.toLowerCase(); // ex: "criança", "jovem"
+            
+            if (filtroFaixa === 'crianca' && !labelLower.includes('criança') && !labelLower.includes('crianca')) return false;
+            if (filtroFaixa === 'jovem' && !labelLower.includes('jovem')) return false;
+            if (filtroFaixa === 'adulto' && !labelLower.includes('adulto')) return false;
+            if (filtroFaixa === 'idoso' && !labelLower.includes('idoso')) return false;
         }
 
         if (filtroGrupo !== 'todos') {
@@ -122,6 +140,7 @@ export default function ListaPublicadores() {
     const colorStyles = {
         blue: "bg-blue-600 text-white border-blue-600 shadow-md",
         indigo: "bg-indigo-600 text-white border-indigo-600 shadow-md",
+        green: "bg-green-600 text-white border-green-600 shadow-md", // Novo style
         pink: "bg-pink-600 text-white border-pink-600 shadow-md",
         purple: "bg-purple-600 text-white border-purple-600 shadow-md",
         orange: "bg-orange-600 text-white border-orange-600 shadow-md",
@@ -152,7 +171,26 @@ export default function ListaPublicadores() {
                     </h1>
                     <p className="text-sm text-gray-500">{publicadoresFiltrados.length} registros</p>
                 </div>
+
                 <div className="flex gap-2 w-full md:w-auto">
+                    {/* --- ÁREA DE EXPORTAÇÃO --- */}
+                    <div className="flex gap-2 mr-0 md:mr-2 border-r border-gray-200 pr-0 md:pr-4">
+                        <button 
+                            onClick={() => gerarPDFListaCompleta(publicadoresFiltrados)}
+                            className="bg-white border border-gray-300 w-10 h-10 rounded-lg text-gray-700 flex items-center justify-center hover:bg-gray-50 transition shadow-sm"
+                            title="Imprimir PDF Completo"
+                        >
+                            <Printer size={18} className="text-red-600" />
+                        </button>
+                        <button 
+                            onClick={() => gerarExcelListaCompleta(publicadoresFiltrados)}
+                            className="bg-white border border-gray-300 w-10 h-10 rounded-lg text-gray-700 flex items-center justify-center hover:bg-gray-50 transition shadow-sm"
+                            title="Baixar Tabela Excel"
+                        >
+                            <FileSpreadsheet size={18} className="text-green-600" />
+                        </button>
+                    </div>
+
                     <button onClick={() => setMostrarFiltros(!mostrarFiltros)} className="md:hidden bg-white border border-gray-300 px-3 py-2 rounded-lg text-gray-700 flex items-center gap-2 font-medium text-sm">
                         <Filter size={16} /> Filtros
                     </button>
@@ -190,26 +228,29 @@ export default function ListaPublicadores() {
                         <TagFilter label="Pioneiro Regular" icon={Briefcase} active={filtroTipo === 'pioneiro_regular'} onClick={() => setFiltroTipo(filtroTipo === 'pioneiro_regular' ? 'todos' : 'pioneiro_regular')} color="blue" />
                         <TagFilter label="Ancião" icon={Shield} active={filtroPrivilegio === 'anciao'} onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'anciao' ? 'todos' : 'anciao')} color="indigo" />
                         <TagFilter label="Servo Min." icon={Shield} active={filtroPrivilegio === 'servo'} onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'servo' ? 'todos' : 'servo')} color="indigo" />
-                        
-                        {/* NOVO FILTRO: NÃO BATIZADO */}
-                        <TagFilter label="Não Batizado" icon={Droplets} active={filtroBatismo === 'nao_batizado'} onClick={() => setFiltroBatismo(filtroBatismo === 'nao_batizado' ? 'todos' : 'nao_batizado')} color="cyan" />
+                        <TagFilter label="Varão Hab." icon={CheckCircle} active={filtroPrivilegio === 'varao'} onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'varao' ? 'todos' : 'varao')} color="green" /> {/* NOVO */}
                     </div>
                     
                     {/* LINHA 3: PERFIL */}
                     <div className="flex flex-wrap gap-2 items-center border-t border-gray-100 pt-2 md:pt-0 md:border-0">
-                         <span className="text-[10px] font-bold text-gray-400 uppercase mr-1 w-16">Perfil:</span>
-                         <TagFilter label="Homem" icon={User} active={filtroGenero === 'Masculino'} onClick={() => setFiltroGenero(filtroGenero === 'Masculino' ? 'todos' : 'Masculino')} color="cyan" />
-                         <TagFilter label="Mulher" icon={User} active={filtroGenero === 'Feminino'} onClick={() => setFiltroGenero(filtroGenero === 'Feminino' ? 'todos' : 'Feminino')} color="pink" />
-                         <div className="w-px h-5 bg-gray-300 mx-1"></div>
-                         <TagFilter label="Criança" icon={Baby} active={filtroFaixa === 'crianca'} onClick={() => setFiltroFaixa(filtroFaixa === 'crianca' ? 'todos' : 'crianca')} color="pink" />
-                         <TagFilter label="Jovem" icon={UserCheck} active={filtroFaixa === 'jovem'} onClick={() => setFiltroFaixa(filtroFaixa === 'jovem' ? 'todos' : 'jovem')} color="purple" />
-                         <TagFilter label="Adulto" icon={User} active={filtroFaixa === 'adulto'} onClick={() => setFiltroFaixa(filtroFaixa === 'adulto' ? 'todos' : 'adulto')} color="blue" />
-                         <TagFilter label="Idoso" icon={Glasses} active={filtroFaixa === 'idoso'} onClick={() => setFiltroFaixa(filtroFaixa === 'idoso' ? 'todos' : 'idoso')} color="orange" />
-                         {temFiltroAtivo && (
-                             <button onClick={limparFiltros} className="ml-auto flex items-center gap-1 text-xs font-bold text-red-600 hover:text-red-800 hover:underline px-2">
-                                <X size={14} /> Limpar
-                            </button>
-                         )}
+                            <span className="text-[10px] font-bold text-gray-400 uppercase mr-1 w-16">Perfil:</span>
+                            <TagFilter label="Homem" icon={User} active={filtroGenero === 'Masculino'} onClick={() => setFiltroGenero(filtroGenero === 'Masculino' ? 'todos' : 'Masculino')} color="cyan" />
+                            <TagFilter label="Mulher" icon={User} active={filtroGenero === 'Feminino'} onClick={() => setFiltroGenero(filtroGenero === 'Feminino' ? 'todos' : 'Feminino')} color="pink" />
+                            <div className="w-px h-5 bg-gray-300 mx-1"></div>
+                            
+                            {/* Filtro Batismo movido para cá */}
+                            <TagFilter label="Não Batizado" icon={Droplets} active={filtroBatismo === 'nao_batizado'} onClick={() => setFiltroBatismo(filtroBatismo === 'nao_batizado' ? 'todos' : 'nao_batizado')} color="cyan" />
+                            <div className="w-px h-5 bg-gray-300 mx-1"></div>
+
+                            <TagFilter label="Criança" icon={Baby} active={filtroFaixa === 'crianca'} onClick={() => setFiltroFaixa(filtroFaixa === 'crianca' ? 'todos' : 'crianca')} color="pink" />
+                            <TagFilter label="Jovem" icon={UserCheck} active={filtroFaixa === 'jovem'} onClick={() => setFiltroFaixa(filtroFaixa === 'jovem' ? 'todos' : 'jovem')} color="purple" />
+                            <TagFilter label="Adulto" icon={User} active={filtroFaixa === 'adulto'} onClick={() => setFiltroFaixa(filtroFaixa === 'adulto' ? 'todos' : 'adulto')} color="blue" />
+                            <TagFilter label="Idoso" icon={Glasses} active={filtroFaixa === 'idoso'} onClick={() => setFiltroFaixa(filtroFaixa === 'idoso' ? 'todos' : 'idoso')} color="orange" />
+                            {temFiltroAtivo && (
+                                <button onClick={limparFiltros} className="ml-auto flex items-center gap-1 text-xs font-bold text-red-600 hover:text-red-800 hover:underline px-2">
+                                    <X size={14} /> Limpar
+                                </button>
+                            )}
                     </div>
                 </div>
             </div>
@@ -265,7 +306,7 @@ export default function ListaPublicadores() {
                                                                 </p>
                                                                 {pub.dados_eclesiasticos.situacao !== 'Ativo' && (
                                                                     <span className={`text-[10px] px-1.5 rounded border font-bold ${pub.dados_eclesiasticos.situacao === 'Inativo' ? 'bg-orange-50 text-orange-600 border-orange-100' : 'bg-red-50 text-red-600 border-red-100'}`}>
-                                                                        {pub.dados_eclesiasticos.situacao}
+                                                                            {pub.dados_eclesiasticos.situacao}
                                                                     </span>
                                                                 )}
                                                             </div>
@@ -274,25 +315,38 @@ export default function ListaPublicadores() {
                                                             <div className="flex flex-wrap gap-1.5 items-center">
                                                                 {faixaEtaria && (
                                                                     <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${faixaEtaria.cor}`}>
-                                                                        {faixaEtaria.label}
+                                                                            {faixaEtaria.label}
                                                                     </span>
                                                                 )}
 
                                                                 {!pub.dados_eclesiasticos.batizado && (
                                                                     <span className="text-[10px] bg-cyan-50 text-cyan-700 px-1.5 py-0.5 rounded border border-cyan-100 font-medium flex items-center gap-1">
-                                                                        <Droplets size={8} /> Não Batizado
+                                                                            <Droplets size={8} /> Não Batizado
                                                                     </span>
                                                                 )}
 
-                                                                {pub.dados_eclesiasticos.privilegios?.map(priv => (
-                                                                    <span key={priv} className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100 font-medium">
-                                                                        {priv}
-                                                                    </span>
-                                                                ))}
+                                                                {/* RENDERIZAÇÃO DOS PRIVILÉGIOS */}
+                                                                {pub.dados_eclesiasticos.privilegios?.map(priv => {
+                                                                    let styleClass = "bg-indigo-50 text-indigo-700 border-indigo-100";
+                                                                    let Icon = Shield;
+
+                                                                    if (priv === "Varão Habilitado") {
+                                                                        styleClass = "bg-green-50 text-green-700 border-green-100";
+                                                                        Icon = CheckCircle;
+                                                                    } else if (priv === "Servo Ministerial") {
+                                                                        styleClass = "bg-blue-50 text-blue-700 border-blue-100";
+                                                                    }
+
+                                                                    return (
+                                                                        <span key={priv} className={`text-[10px] px-1.5 py-0.5 rounded border font-medium flex items-center gap-1 ${styleClass}`}>
+                                                                            <Icon size={8} /> {priv}
+                                                                        </span>
+                                                                    );
+                                                                })}
 
                                                                 {pub.dados_eclesiasticos.pioneiro_tipo && (
                                                                     <span className="text-[10px] bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded border border-yellow-100 font-medium">
-                                                                        {pub.dados_eclesiasticos.pioneiro_tipo}
+                                                                            {pub.dados_eclesiasticos.pioneiro_tipo}
                                                                     </span>
                                                                 )}
                                                             </div>

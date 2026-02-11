@@ -1,38 +1,41 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { db } from '../../config/firebase';
 import { doc, getDoc, collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import {
     Calendar, Phone, MapPin, PlusCircle, ChevronLeft, BarChart3, Pencil,
-    Droplets, HeartPulse, Mail, Shield, Star, ExternalLink, ChevronDown, ChevronRight
+    Droplets, HeartPulse, Mail, Shield, Star, ExternalLink, ChevronDown, ChevronRight,
+    CheckCircle, Printer
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import ModalLancamento from '../../components/Relatorios/ModalLancamento';
-import ModalEditarPublicador from '../../components/Publicadores/ModalEditarPublicador';
 import { calcularFaixaEtaria } from '../../utils/helpers';
+// CORREÇÃO AQUI: Importar a função de PDF Individual
+import { gerarPDFIndividual } from '../../utils/geradorPDF';
 
 export default function DetalhesPublicador() {
     const { id } = useParams();
+    const navigate = useNavigate();
     const [publicador, setPublicador] = useState(null);
     const [relatoriosPorAno, setRelatoriosPorAno] = useState({});
     const [loading, setLoading] = useState(true);
+    const [imprimindo, setImprimindo] = useState(false);
 
-    // Controle dos Modais
     const [modalLancamentoAberto, setModalLancamentoAberto] = useState(false);
-    const [modalEditarAberto, setModalEditarAberto] = useState(false);
     const [relatorioParaEditar, setRelatorioParaEditar] = useState(null);
-
-    // Controle dos Anos Colapsáveis
     const [anosExpandidos, setAnosExpandidos] = useState({});
 
-    // Configuração dos Anos
-    const anoServicoAtual = 2026;
+    // --- CÁLCULO DINÂMICO DO ANO DE SERVIÇO ---
+    const getAnoServicoAtual = () => {
+        const hoje = new Date();
+        return hoje.getMonth() >= 8 ? hoje.getFullYear() + 1 : hoje.getFullYear();
+    };
+
+    const anoServicoAtual = getAnoServicoAtual();
     const anosParaExibir = [anoServicoAtual, anoServicoAtual - 1, anoServicoAtual - 2];
 
     useEffect(() => {
         carregarDados();
-
-        // Inicializa o ano atual aberto e os outros fechados (opcional, aqui deixei todos abertos por padrão no toggle logic)
         setAnosExpandidos({ [anoServicoAtual]: true });
     }, [id]);
 
@@ -74,6 +77,26 @@ export default function DetalhesPublicador() {
         }
     };
 
+    // --- CORREÇÃO: IMPRIMIR PDF DIRETO (SEM ZIP) ---
+    const handleImprimirIndividual = () => {
+        setImprimindo(true);
+        try {
+            // Chama a função que gera o PDF direto no navegador
+            gerarPDFIndividual(
+                publicador,
+                relatoriosPorAno,
+                anosParaExibir
+            );
+
+            toast.success("PDF baixado com sucesso!");
+        } catch (error) {
+            console.error("Erro ao imprimir:", error);
+            toast.error("Erro ao gerar PDF.");
+        } finally {
+            setImprimindo(false);
+        }
+    };
+
     const abrirModalLancamento = (relatorio = null) => {
         setRelatorioParaEditar(relatorio);
         setModalLancamentoAberto(true);
@@ -82,8 +105,12 @@ export default function DetalhesPublicador() {
     const toggleAno = (ano) => {
         setAnosExpandidos(prev => ({
             ...prev,
-            [ano]: prev[ano] === undefined ? false : !prev[ano] // Se undefined (primeira vez), considera true e inverte -> false
+            [ano]: prev[ano] === undefined ? false : !prev[ano]
         }));
+    };
+
+    const handleEditarPublicador = () => {
+        navigate(`/publicadores/editar/${id}`);
     };
 
     const gerarMesesAnoServico = (anoServico) => {
@@ -117,11 +144,22 @@ export default function DetalhesPublicador() {
     if (!publicador) return <div className="p-8 text-center">Publicador não localizado.</div>;
 
     const faixaEtaria = calcularFaixaEtaria(publicador.dados_pessoais.data_nascimento);
-    const celular = publicador.dados_pessoais.contatos?.celular;
-    const email = publicador.dados_pessoais.contatos?.email;
-    const endereco = publicador.dados_pessoais.endereco?.logradouro;
-    const emergenciaNome = publicador.dados_pessoais.contatos?.emergencia_nome;
-    const emergenciaTel = publicador.dados_pessoais.contatos?.emergencia_tel;
+    const dp = publicador.dados_pessoais || {};
+    const contatos = dp.contatos || {};
+
+    const celular = contatos.celular || dp.celular || dp.telefone;
+    const email = contatos.email || dp.email;
+    const emergenciaNome = contatos.emergencia_nome || dp.emergencia_nome || publicador.contato_emergencia?.nome;
+    const emergenciaTel = contatos.emergencia_tel || dp.emergencia_tel || publicador.contato_emergencia?.telefone;
+
+    let enderecoExibicao = "Sem endereço";
+    if (dp.endereco) {
+        if (typeof dp.endereco === 'object') {
+            enderecoExibicao = `${dp.endereco.logradouro || ''}, ${dp.endereco.cidade || ''}`;
+        } else {
+            enderecoExibicao = dp.endereco;
+        }
+    }
 
     const statusColor = {
         "Ativo": "bg-green-100 text-green-700",
@@ -150,9 +188,25 @@ export default function DetalhesPublicador() {
                                 <h1 className="text-lg md:text-2xl font-bold text-gray-800 leading-tight">
                                     {publicador.dados_pessoais.nome_completo}
                                 </h1>
-                                <button onClick={() => setModalEditarAberto(true)} className="p-1 text-gray-400 hover:text-blue-600 bg-gray-50 rounded-full">
-                                    <Pencil size={16} />
-                                </button>
+
+                                <div className="flex gap-1">
+                                    <button
+                                        onClick={handleEditarPublicador}
+                                        className="p-1.5 text-gray-500 hover:text-blue-600 bg-gray-100 hover:bg-blue-50 rounded-lg transition"
+                                        title="Editar Dados"
+                                    >
+                                        <Pencil size={18} />
+                                    </button>
+
+                                    <button
+                                        onClick={handleImprimirIndividual}
+                                        disabled={imprimindo}
+                                        className="p-1.5 text-gray-500 hover:text-green-600 bg-gray-100 hover:bg-green-50 rounded-lg transition disabled:opacity-50"
+                                        title="Baixar S-21 (PDF Direto)"
+                                    >
+                                        {imprimindo ? <div className="animate-spin h-4 w-4 border-2 border-gray-500 border-t-transparent rounded-full" /> : <Printer size={18} />}
+                                    </button>
+                                </div>
                             </div>
 
                             <div className="flex flex-wrap gap-2 mt-2">
@@ -163,11 +217,23 @@ export default function DetalhesPublicador() {
                                     {publicador.dados_eclesiasticos.grupo_campo}
                                 </span>
 
-                                {publicador.dados_eclesiasticos.privilegios?.map(priv => (
-                                    <span key={priv} className="px-2 py-0.5 bg-indigo-100 text-indigo-800 text-xs rounded font-bold border border-indigo-200 flex items-center gap-1">
-                                        <Shield size={10} /> {priv}
-                                    </span>
-                                ))}
+                                {publicador.dados_eclesiasticos.privilegios?.map(priv => {
+                                    let styleClass = "bg-indigo-100 text-indigo-800 border-indigo-200";
+                                    let Icon = Shield;
+
+                                    if (priv === "Varão Habilitado") {
+                                        styleClass = "bg-green-100 text-green-800 border-green-200";
+                                        Icon = CheckCircle;
+                                    } else if (priv === "Servo Ministerial") {
+                                        styleClass = "bg-blue-100 text-blue-800 border-blue-200";
+                                    }
+
+                                    return (
+                                        <span key={priv} className={`px-2 py-0.5 text-xs rounded font-bold border flex items-center gap-1 ${styleClass}`}>
+                                            <Icon size={10} /> {priv}
+                                        </span>
+                                    );
+                                })}
 
                                 {publicador.dados_eclesiasticos.pioneiro_tipo && (
                                     <span className="px-2 py-0.5 bg-yellow-50 text-yellow-700 text-xs rounded font-bold border border-yellow-100 flex items-center gap-1">
@@ -224,18 +290,17 @@ export default function DetalhesPublicador() {
                             {email ? <a href={`mailto:${email}`} className="hover:text-blue-600 hover:underline truncate">{email}</a> : <span className="text-gray-400 italic">Sem e-mail</span>}
                         </div>
 
-                        {/* ENDEREÇO COM LINK PARA GOOGLE MAPS */}
                         <div className="flex items-start gap-2 text-gray-600">
                             <MapPin size={16} className="text-gray-400 shrink-0 mt-0.5" />
-                            {endereco ? (
+                            {dp.endereco ? (
                                 <a
-                                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(endereco)}`}
+                                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(enderecoExibicao)}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="hover:text-blue-600 hover:underline break-words leading-tight flex items-center gap-1 group"
                                     title="Abrir no Google Maps"
                                 >
-                                    {endereco} <ExternalLink size={12} className="opacity-50 group-hover:opacity-100" />
+                                    {enderecoExibicao} <ExternalLink size={12} className="opacity-50 group-hover:opacity-100" />
                                 </a>
                             ) : (
                                 <span className="text-gray-400 italic">Sem endereço</span>
@@ -253,20 +318,18 @@ export default function DetalhesPublicador() {
                 </div>
             </div>
 
-            {/* --- TABELAS DE RELATÓRIOS --- */}
+            {/* --- TABELAS DE RELATÓRIOS (S-21) --- */}
             <div className="space-y-6">
                 {anosParaExibir.map(ano => {
                     const totaisAno = calcularTotaisAno(ano);
                     const mesesAno = gerarMesesAnoServico(ano);
                     const relatoriosAno = relatoriosPorAno[ano] || {};
-                    // Se estiver no state como false, está fechado. Se undefined ou true, está aberto.
-                    // Vamos inverter: Default (undefined) = Aberto.
                     const isExpanded = anosExpandidos[ano] !== false;
 
                     return (
                         <div key={ano} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden transition-all duration-300">
 
-                            {/* HEADER DO ANO (CLICÁVEL) */}
+                            {/* HEADER DO ANO */}
                             <div
                                 onClick={() => toggleAno(ano)}
                                 className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center cursor-pointer hover:bg-gray-100 select-none"
@@ -338,21 +401,12 @@ export default function DetalhesPublicador() {
                 })}
             </div>
 
-            {/* MODAIS */}
             {modalLancamentoAberto && (
                 <ModalLancamento
                     idPublicador={id}
                     dadosPublicador={publicador}
                     relatorioParaEditar={relatorioParaEditar}
                     onClose={() => setModalLancamentoAberto(false)}
-                    onSucesso={carregarDados}
-                />
-            )}
-
-            {modalEditarAberto && (
-                <ModalEditarPublicador
-                    publicador={publicador}
-                    onClose={() => setModalEditarAberto(false)}
                     onSucesso={carregarDados}
                 />
             )}

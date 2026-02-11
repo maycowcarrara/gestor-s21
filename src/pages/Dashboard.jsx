@@ -1,18 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../config/firebase';
-import { collection, getDocs, query } from 'firebase/firestore';
-import { Users, Briefcase, Award, AlertCircle, TrendingUp, UserCheck, FileText, Plus } from 'lucide-react';
+import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+import { Users, FileText, TrendingUp, AlertCircle, Clock, Calendar, CheckCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 export default function Dashboard() {
     const [stats, setStats] = useState({
         totalPublicadores: 0,
+        ativos: 0,
         pioneirosRegulares: 0,
         anciaos: 0,
         servos: 0,
-        inativos: 0,
-        ungidos: 0,
-        grupos: {}
+        varoes: 0, // NOVO CAMPO
+        irregulares: 0,
+        inativos: 0
     });
     const [loading, setLoading] = useState(true);
 
@@ -23,40 +24,39 @@ export default function Dashboard() {
     const carregarEstatisticas = async () => {
         try {
             const q = query(collection(db, "publicadores"));
-            const snapshot = await getDocs(q);
-            const pubs = snapshot.docs.map(doc => doc.data());
+            const querySnapshot = await getDocs(q);
 
             const novosStats = {
                 totalPublicadores: 0,
+                ativos: 0,
                 pioneirosRegulares: 0,
                 anciaos: 0,
                 servos: 0,
-                inativos: 0,
-                ungidos: 0,
-                grupos: {}
+                varoes: 0, // INICIALIZA
+                irregulares: 0,
+                inativos: 0
             };
 
-            pubs.forEach(pub => {
-                const ec = pub.dados_eclesiasticos || {};
-                const pes = pub.dados_pessoais || {};
+            querySnapshot.forEach((doc) => {
+                const data = doc.data();
+                const ec = data.dados_eclesiasticos || {};
+                const sit = ec.situacao || "Ativo";
 
-                if (ec.situacao === 'Ativo') {
+                if (sit !== 'Removido') {
                     novosStats.totalPublicadores++;
-                } else {
-                    novosStats.inativos++;
+
+                    // Contagem de Privilégios
+                    const privs = ec.privilegios || [];
+                    if (privs.includes('Ancião')) novosStats.anciaos++;
+                    if (privs.includes('Servo Ministerial')) novosStats.servos++;
+                    if (privs.includes('Varão Habilitado')) novosStats.varoes++; // LÓGICA NOVA
+
+                    if (ec.pioneiro_tipo === 'Pioneiro Regular') novosStats.pioneirosRegulares++;
+
+                    if (sit === 'Ativo') novosStats.ativos++;
+                    else if (sit === 'Irregular') novosStats.irregulares++;
+                    else if (sit === 'Inativo') novosStats.inativos++;
                 }
-
-                if (ec.pioneiro_tipo === 'Pioneiro Regular' && ec.situacao === 'Ativo') {
-                    novosStats.pioneirosRegulares++;
-                }
-
-                if (ec.privilegios?.includes('Ancião')) novosStats.anciaos++;
-                if (ec.privilegios?.includes('Servo Ministerial')) novosStats.servos++;
-                if (pes.esperanca === 'Ungido') novosStats.ungidos++;
-
-                const grupo = ec.grupo_campo || 'Sem Grupo';
-                if (!novosStats.grupos[grupo]) novosStats.grupos[grupo] = 0;
-                if (ec.situacao === 'Ativo') novosStats.grupos[grupo]++;
             });
 
             setStats(novosStats);
@@ -67,115 +67,122 @@ export default function Dashboard() {
         }
     };
 
-    if (loading) return <div className="p-8 text-center text-xs text-gray-500">Atualizando visão geral...</div>;
+    if (loading) {
+        return (
+            <div className="flex justify-center items-center h-64 text-gray-500">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-2"></div>
+                Carregando visão geral...
+            </div>
+        );
+    }
 
     return (
-        <div className="p-3 md:p-6 max-w-7xl mx-auto pb-24">
+        <div className="p-4 md:p-8 max-w-7xl mx-auto pb-24">
+            <h1 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+                <TrendingUp className="text-teocratico-blue" /> Visão Geral da Congregação
+            </h1>
 
-            {/* CABEÇALHO COMPACTO */}
-            <div className="flex items-center justify-between mb-4">
-                <h1 className="text-lg md:text-2xl font-bold text-gray-800 flex items-center gap-2">
-                    <TrendingUp className="text-teocratico-blue w-5 h-5" /> Visão Geral
-                </h1>
-                <span className="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded border border-blue-100 font-semibold">
-                    {stats.totalPublicadores} Ativos
-                </span>
-            </div>
+            {/* GRID DE CARDS */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
 
-            {/* GRID DE CARDS (2 por linha no Mobile) */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-
-                {/* Card 1: Publicadores */}
-                <div className="bg-white p-3 md:p-6 rounded-xl shadow-sm border border-gray-200 relative overflow-hidden">
-                    <div className="relative z-10">
+                {/* CARD 1: TOTAIS */}
+                <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 flex items-center justify-between">
+                    <div>
                         <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Publicadores</p>
-                        <p className="text-2xl md:text-4xl font-extrabold text-gray-800 mt-1">{stats.totalPublicadores}</p>
+                        <h2 className="text-3xl font-extrabold text-gray-800 mt-1">{stats.totalPublicadores}</h2>
+                        <span className="text-xs text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded-full">
+                            {stats.ativos} Ativos
+                        </span>
                     </div>
-                    <Users className="absolute right-2 bottom-2 text-blue-100 w-12 h-12 -z-0" />
+                    <div className="p-3 bg-blue-50 rounded-lg text-blue-600">
+                        <Users size={24} />
+                    </div>
                 </div>
 
-                {/* Card 2: Pioneiros */}
-                <div className="bg-white p-3 md:p-6 rounded-xl shadow-sm border border-gray-200 relative overflow-hidden">
-                    <div className="relative z-10">
+                {/* CARD 2: PIONEIROS */}
+                <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 flex items-center justify-between">
+                    <div>
                         <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Pioneiros Reg.</p>
-                        <p className="text-2xl md:text-4xl font-extrabold text-yellow-600 mt-1">{stats.pioneirosRegulares}</p>
+                        <h2 className="text-3xl font-extrabold text-gray-800 mt-1">{stats.pioneirosRegulares}</h2>
+                        <span className="text-xs text-gray-400">Tempo Integral</span>
                     </div>
-                    <Briefcase className="absolute right-2 bottom-2 text-yellow-100 w-12 h-12 -z-0" />
+                    <div className="p-3 bg-yellow-50 rounded-lg text-yellow-600">
+                        <Clock size={24} />
+                    </div>
                 </div>
 
-                {/* Card 3: Designados (Anc/Serv) */}
-                <div className="bg-white p-3 md:p-6 rounded-xl shadow-sm border border-gray-200 relative overflow-hidden">
-                    <div className="relative z-10">
-                        <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Anc. / Servos</p>
-                        <div className="flex items-baseline gap-1 mt-1">
-                            <p className="text-2xl md:text-4xl font-extrabold text-gray-800">{stats.anciaos}</p>
-                            <span className="text-gray-400 text-sm">/</span>
-                            <p className="text-lg md:text-2xl font-bold text-gray-500">{stats.servos}</p>
+                {/* CARD 3: LIDERANÇA (ATUALIZADO) */}
+                <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 flex items-center justify-between">
+                    <div>
+                        <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Designados</p>
+                        <div className="flex gap-3 mt-1 items-baseline">
+                            <div className="text-center">
+                                <span className="block text-xl font-bold text-indigo-700">{stats.anciaos}</span>
+                                <span className="text-[10px] text-gray-400 uppercase">Anc.</span>
+                            </div>
+                            <div className="w-px h-8 bg-gray-200"></div>
+                            <div className="text-center">
+                                <span className="block text-xl font-bold text-blue-600">{stats.servos}</span>
+                                <span className="text-[10px] text-gray-400 uppercase">Serv.</span>
+                            </div>
+                            <div className="w-px h-8 bg-gray-200"></div>
+                            <div className="text-center">
+                                <span className="block text-xl font-bold text-green-600">{stats.varoes}</span>
+                                <span className="text-[10px] text-gray-400 uppercase">Var.</span>
+                            </div>
                         </div>
                     </div>
-                    <Award className="absolute right-2 bottom-2 text-green-100 w-12 h-12 -z-0" />
+                    {/* Oculto em telas pequenas para caber os números */}
+                    <div className="hidden xl:block p-3 bg-indigo-50 rounded-lg text-indigo-600">
+                        <CheckCircle size={24} />
+                    </div>
                 </div>
 
-                {/* Card 4: Inativos */}
-                <div className="bg-white p-3 md:p-6 rounded-xl shadow-sm border border-gray-200 relative overflow-hidden">
-                    <div className="relative z-10">
-                        <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Inativos</p>
-                        <p className="text-2xl md:text-4xl font-extrabold text-red-600 mt-1">{stats.inativos}</p>
+                {/* CARD 4: ATENÇÃO */}
+                <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 flex items-center justify-between">
+                    <div>
+                        <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Atenção</p>
+                        <div className="flex gap-2 mt-1">
+                            <span className="text-lg font-bold text-orange-600">{stats.irregulares} Irreg.</span>
+                            <span className="text-gray-300">|</span>
+                            <span className="text-lg font-bold text-red-600">{stats.inativos} Inat.</span>
+                        </div>
                     </div>
-                    <AlertCircle className="absolute right-2 bottom-2 text-red-100 w-12 h-12 -z-0" />
+                    <div className="p-3 bg-red-50 rounded-lg text-red-600">
+                        <AlertCircle size={24} />
+                    </div>
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-8">
-
-                {/* GRUPOS DE CAMPO */}
-                <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-                    <h3 className="font-bold text-gray-700 mb-3 flex items-center gap-2 text-sm md:text-base">
-                        <Users size={16} /> Grupos de Campo
-                    </h3>
-                    <div className="space-y-3">
-                        {Object.keys(stats.grupos).sort().map(grupo => {
-                            const porcentagem = stats.totalPublicadores > 0
-                                ? (stats.grupos[grupo] / stats.totalPublicadores) * 100
-                                : 0;
-
-                            return (
-                                <div key={grupo}>
-                                    <div className="flex justify-between text-xs mb-1">
-                                        <span className="font-medium text-gray-700">{grupo}</span>
-                                        <span className="font-bold text-gray-900">{stats.grupos[grupo]}</span>
-                                    </div>
-                                    <div className="w-full bg-gray-100 rounded-full h-1.5 md:h-2">
-                                        <div
-                                            className="bg-teocratico-blue h-1.5 md:h-2 rounded-full"
-                                            style={{ width: `${porcentagem}%` }}
-                                        ></div>
-                                    </div>
-                                </div>
-                            );
-                        })}
+            {/* ATALHOS RÁPIDOS */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Link to="/relatorios" className="bg-gradient-to-r from-blue-600 to-blue-700 text-white p-6 rounded-xl shadow-lg hover:shadow-xl transition flex items-center justify-between group">
+                    <div>
+                        <h3 className="font-bold text-lg">Coletar Relatórios</h3>
+                        <p className="text-blue-100 text-sm opacity-90">Lançar atividades do mês</p>
                     </div>
-                </div>
+                    <FileText className="group-hover:scale-110 transition-transform" size={28} />
+                </Link>
 
-                {/* AÇÕES RÁPIDAS (Grid 2x2 no mobile para economizar altura) */}
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-                    <h3 className="font-bold text-gray-700 mb-3 flex items-center gap-2 text-sm md:text-base">
-                        <UserCheck size={16} /> Ações Rápidas
-                    </h3>
-                    <div className="grid grid-cols-2 lg:grid-cols-1 gap-2">
-                        <Link to="/publicadores/novo" className="flex flex-col md:flex-row items-center justify-center md:justify-start gap-2 p-3 bg-blue-50 text-blue-700 font-semibold rounded-lg hover:bg-blue-100 transition text-xs md:text-sm border border-blue-100">
-                            <Plus size={16} /> Novo Publicador
-                        </Link>
-                        <Link to="/relatorios" className="flex flex-col md:flex-row items-center justify-center md:justify-start gap-2 p-3 bg-green-50 text-green-700 font-semibold rounded-lg hover:bg-green-100 transition text-xs md:text-sm border border-green-100">
-                            <FileText size={16} /> Ver Relatórios
-                        </Link>
+                <Link to="/publicadores/novo" className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 hover:border-blue-300 transition flex items-center justify-between group">
+                    <div>
+                        <h3 className="font-bold text-gray-800">Novo Publicador</h3>
+                        <p className="text-gray-500 text-sm">Adicionar ficha S-21</p>
                     </div>
-
-                    <div className="mt-4 p-3 bg-yellow-50 rounded-lg border border-yellow-100 text-xs text-yellow-800">
-                        <strong>Dica:</strong> Mantenha os cadastros de emergência atualizados.
+                    <div className="bg-gray-100 p-2 rounded-full group-hover:bg-blue-50 transition">
+                        <Users className="text-gray-600 group-hover:text-blue-600" size={20} />
                     </div>
-                </div>
+                </Link>
 
+                <Link to="/reunioes" className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 hover:border-blue-300 transition flex items-center justify-between group">
+                    <div>
+                        <h3 className="font-bold text-gray-800">Reuniões</h3>
+                        <p className="text-gray-500 text-sm">Lançar assistência</p>
+                    </div>
+                    <div className="bg-gray-100 p-2 rounded-full group-hover:bg-blue-50 transition">
+                        <Calendar className="text-gray-600 group-hover:text-blue-600" size={20} />
+                    </div>
+                </Link>
             </div>
         </div>
     );

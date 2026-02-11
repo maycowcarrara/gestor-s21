@@ -1,46 +1,97 @@
 import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { db } from '../../config/firebase';
-import { collection, addDoc, Timestamp, doc, getDoc } from 'firebase/firestore';
-import { useNavigate } from 'react-router-dom';
-import { Save, User, MapPin, Phone, Briefcase, Mail, Languages, Droplets, Calendar } from 'lucide-react';
+import { collection, addDoc, updateDoc, Timestamp, doc, getDoc } from 'firebase/firestore';
+import { useNavigate, useParams, Link } from 'react-router-dom';
+import { Save, User, MapPin, Phone, Briefcase, Mail, Languages, Droplets, Calendar, Star, ArrowLeft, Pencil } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function NovoPublicador() {
-    const { register, handleSubmit, watch, formState: { errors } } = useForm({
+    const { id } = useParams();
+    const isEditMode = !!id;
+
+    const { register, handleSubmit, watch, reset, formState: { errors } } = useForm({
         defaultValues: {
             esperanca: "Outras Ovelhas",
             genero: "Masculino",
             batizado: true,
-            pioneiro_tipo: "Nenhum"
+            pioneiro_tipo: "Nenhum",
+            designacao: "Nenhuma"
         }
     });
+
     const [loading, setLoading] = useState(false);
     const [listaGrupos, setListaGrupos] = useState(["Hípica", "Santuário", "Salão do Reino", "IDM/LS Palmas"]);
     const navigate = useNavigate();
 
-    // Carrega grupos da configuração
     useEffect(() => {
-        const fetchConfig = async () => {
+        const carregarDados = async () => {
             try {
-                const docRef = doc(db, "config", "geral");
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists() && docSnap.data().grupos) {
-                    setListaGrupos(docSnap.data().grupos);
+                const configRef = doc(db, "config", "geral");
+                const configSnap = await getDoc(configRef);
+                if (configSnap.exists() && configSnap.data().grupos) {
+                    setListaGrupos(configSnap.data().grupos);
+                }
+
+                if (isEditMode) {
+                    setLoading(true);
+                    const docRef = doc(db, "publicadores", id);
+                    const docSnap = await getDoc(docRef);
+
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        let designacaoAtual = "Nenhuma";
+                        const privs = data.dados_eclesiasticos?.privilegios || [];
+                        if (privs.includes("Ancião")) designacaoAtual = "Ancião";
+                        else if (privs.includes("Servo Ministerial")) designacaoAtual = "Servo Ministerial";
+                        else if (privs.includes("Varão Habilitado")) designacaoAtual = "Varão Habilitado";
+
+                        reset({
+                            nome_completo: data.dados_pessoais?.nome_completo,
+                            data_nascimento: data.dados_pessoais?.data_nascimento,
+                            genero: data.dados_pessoais?.genero || "Masculino",
+                            esperanca: data.dados_pessoais?.esperanca || "Outras Ovelhas",
+                            outra_lingua: data.dados_pessoais?.outra_lingua,
+                            celular: data.dados_pessoais?.contatos?.celular,
+                            email: data.dados_pessoais?.contatos?.email,
+                            endereco: data.dados_pessoais?.endereco?.logradouro,
+                            emergencia_nome: data.dados_pessoais?.contatos?.emergencia_nome,
+                            emergencia_tel: data.dados_pessoais?.contatos?.emergencia_tel,
+                            batizado: data.dados_eclesiasticos?.batizado,
+                            data_batismo: data.dados_eclesiasticos?.data_batismo,
+                            data_inicio: data.dados_eclesiasticos?.data_inicio,
+                            grupo_campo: data.dados_eclesiasticos?.grupo_campo,
+                            pioneiro_tipo: data.dados_eclesiasticos?.pioneiro_tipo || "Nenhum",
+                            data_inicio_pioneiro: data.dados_eclesiasticos?.data_designacao_pioneiro,
+                            designacao: designacaoAtual
+                        });
+                    } else {
+                        toast.error("Publicador não encontrado.");
+                        navigate('/publicadores');
+                    }
+                    setLoading(false);
                 }
             } catch (error) {
-                console.error("Erro ao carregar grupos:", error);
+                console.error("Erro ao carregar:", error);
+                toast.error("Erro ao carregar dados.");
+                setLoading(false);
             }
         };
-        fetchConfig();
-    }, []);
+        carregarDados();
+    }, [id, isEditMode, navigate, reset]);
 
     const isBatizado = watch("batizado");
+    const generoSelecionado = watch("genero");
 
     const onSubmit = async (data) => {
         setLoading(true);
         try {
-            const novoPublicador = {
+            let listaPrivilegios = [];
+            if (data.designacao && data.designacao !== "Nenhuma") {
+                listaPrivilegios.push(data.designacao);
+            }
+
+            const dadosBase = {
                 dados_pessoais: {
                     nome_completo: data.nome_completo,
                     data_nascimento: data.data_nascimento || null,
@@ -62,27 +113,34 @@ export default function NovoPublicador() {
                 dados_eclesiasticos: {
                     batizado: data.batizado,
                     data_batismo: (data.batizado && data.data_batismo) ? data.data_batismo : null,
-                    // CAMPO NOVO:
                     data_inicio: data.data_inicio || null,
-
-                    privilegios: data.privilegios || [],
+                    privilegios: listaPrivilegios,
                     grupo_campo: data.grupo_campo || listaGrupos[0],
                     situacao: "Ativo",
                     pioneiro_tipo: data.pioneiro_tipo !== "Nenhum" ? data.pioneiro_tipo : null,
                     data_designacao_pioneiro: data.data_inicio_pioneiro || null
                 },
-                status_atividade: {
-                    ultimo_relatorio_postado: null,
-                    meses_sem_relatar: 0
-                },
-                totais_anuais: {},
-                keywords: data.nome_completo ? data.nome_completo.toLowerCase().split(' ') : [],
-                criado_em: Timestamp.now()
+                keywords: data.nome_completo ? data.nome_completo.toLowerCase().split(' ') : []
             };
 
-            await addDoc(collection(db, "publicadores"), novoPublicador);
-            toast.success("Publicador cadastrado com sucesso!");
-            navigate('/publicadores');
+            if (isEditMode) {
+                await updateDoc(doc(db, "publicadores", id), {
+                    ...dadosBase,
+                    atualizado_em: Timestamp.now()
+                });
+                toast.success("Cadastro atualizado com sucesso!");
+                navigate(`/publicadores/${id}`);
+            } else {
+                const novoRegistro = {
+                    ...dadosBase,
+                    status_atividade: { ultimo_relatorio_postado: null, meses_sem_relatar: 0 },
+                    totais_anuais: {},
+                    criado_em: Timestamp.now()
+                };
+                await addDoc(collection(db, "publicadores"), novoRegistro);
+                toast.success("Publicador cadastrado com sucesso!");
+                navigate('/publicadores');
+            }
         } catch (error) {
             console.error("Erro ao salvar:", error);
             toast.error("Erro ao salvar: " + error.message);
@@ -92,10 +150,18 @@ export default function NovoPublicador() {
     };
 
     return (
-        <div className="max-w-4xl mx-auto p-4 md:p-6 pb-24">
-            <h1 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-                <User className="w-6 h-6 text-teocratico-blue" /> Novo Registro de Publicador (S-21)
-            </h1>
+        <div className="max-w-4xl mx-auto p-4 md:p-6 pb-20">
+            {/* pb-20 garante espaço extra no final para o botão salvar não colar na borda */}
+
+            <div className="mb-6 flex items-center gap-3">
+                <Link to={isEditMode ? `/publicadores/${id}` : "/publicadores"} className="p-2 hover:bg-gray-200 rounded-full text-gray-500 transition">
+                    <ArrowLeft size={24} />
+                </Link>
+                <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+                    {isEditMode ? <Pencil className="w-6 h-6 text-teocratico-blue" /> : <User className="w-6 h-6 text-teocratico-blue" />}
+                    {isEditMode ? "Editar Cadastro" : "Novo Registro S-21"}
+                </h1>
+            </div>
 
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
 
@@ -187,12 +253,11 @@ export default function NovoPublicador() {
 
                             {isBatizado && (
                                 <div className="animate-in fade-in slide-in-from-top-1 mb-3">
-                                    <label className="block text-xs text-gray-600 mb-1 font-bold">Data de Batismo (Opcional)</label>
+                                    <label className="block text-xs text-gray-600 mb-1 font-bold">Data de Batismo</label>
                                     <input type="date" {...register("data_batismo")} className="w-full border p-2 rounded text-sm bg-white" />
                                 </div>
                             )}
 
-                            {/* --- CAMPO NOVO: INÍCIO NA CONGREGAÇÃO --- */}
                             <div className="border-t border-blue-200 pt-3 mt-2">
                                 <label className="block text-xs font-bold text-blue-800 mb-1 flex items-center gap-1">
                                     <Calendar size={14} /> Início na Congregação
@@ -203,7 +268,7 @@ export default function NovoPublicador() {
                                     className="w-full border p-2 rounded text-sm bg-white focus:ring-2 focus:ring-green-400 outline-none"
                                 />
                                 <p className="text-[10px] text-blue-600 mt-1 leading-tight">
-                                    Use esta data para que o sistema não cobre relatórios anteriores à chegada do publicador.
+                                    Data de chegada para cálculo correto dos relatórios.
                                 </p>
                             </div>
                         </div>
@@ -223,32 +288,75 @@ export default function NovoPublicador() {
                             </select>
                         </div>
 
-                        <div className="col-span-2">
-                            <label className="block text-sm font-medium text-gray-700 mb-2">Designação</label>
-                            <div className="flex gap-4 bg-gray-50 p-3 rounded">
-                                <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" value="Ancião" {...register("privilegios")} className="rounded text-blue-600" /><span>Ancião</span></label>
-                                <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" value="Servo Ministerial" {...register("privilegios")} className="rounded text-blue-600" /><span>Servo Ministerial</span></label>
+                        {/* DESIGNAÇÃO */}
+                        {generoSelecionado === "Masculino" && (
+                            <div className="col-span-2 border-t pt-4 mt-2">
+                                <label className="block text-sm font-bold text-gray-800 mb-3 flex items-center gap-2">
+                                    <Star size={16} className="text-yellow-500" /> Designação / Privilégios
+                                </label>
+
+                                {/* Otimização do Grid: 1 coluna no mobile, 2 em telas médias, 4 em PC */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                                    {/* Nenhuma */}
+                                    <label className="cursor-pointer h-full block">
+                                        <input type="radio" value="Nenhuma" {...register("designacao")} className="peer sr-only" />
+                                        <div className="rounded-lg border border-gray-200 p-3 text-center hover:bg-gray-50 peer-checked:bg-gray-100 peer-checked:border-gray-400 peer-checked:ring-1 peer-checked:ring-gray-400 transition-all h-full flex items-center justify-center">
+                                            <span className="text-sm font-medium text-gray-600">Nenhuma</span>
+                                        </div>
+                                    </label>
+
+                                    {/* Varão Habilitado */}
+                                    <label className="cursor-pointer h-full block">
+                                        <input type="radio" value="Varão Habilitado" {...register("designacao")} className="peer sr-only" />
+                                        <div className="rounded-lg border border-gray-200 p-3 text-center hover:bg-green-50 peer-checked:bg-green-100 peer-checked:border-green-500 peer-checked:text-green-800 peer-checked:ring-1 peer-checked:ring-green-500 transition-all h-full flex items-center justify-center">
+                                            <span className="text-sm font-bold">Varão Habilitado</span>
+                                        </div>
+                                    </label>
+
+                                    {/* Servo Ministerial */}
+                                    <label className="cursor-pointer h-full block">
+                                        <input type="radio" value="Servo Ministerial" {...register("designacao")} className="peer sr-only" />
+                                        <div className="rounded-lg border border-gray-200 p-3 text-center hover:bg-blue-50 peer-checked:bg-blue-100 peer-checked:border-blue-500 peer-checked:text-blue-800 peer-checked:ring-1 peer-checked:ring-blue-500 transition-all h-full flex items-center justify-center">
+                                            <span className="text-sm font-bold">Servo Ministerial</span>
+                                        </div>
+                                    </label>
+
+                                    {/* Ancião */}
+                                    <label className="cursor-pointer h-full block">
+                                        <input type="radio" value="Ancião" {...register("designacao")} className="peer sr-only" />
+                                        <div className="rounded-lg border border-gray-200 p-3 text-center hover:bg-indigo-50 peer-checked:bg-indigo-100 peer-checked:border-indigo-500 peer-checked:text-indigo-800 peer-checked:ring-1 peer-checked:ring-indigo-500 transition-all h-full flex items-center justify-center">
+                                            <span className="text-sm font-bold">Ancião</span>
+                                        </div>
+                                    </label>
+                                </div>
+                                <p className="text-[10px] text-gray-400 mt-2 ml-1">* Selecione apenas uma designação.</p>
                             </div>
-                        </div>
+                        )}
 
                         <div className="col-span-2 border-t pt-4 mt-2">
                             <label className="block text-sm font-medium text-gray-700 mb-2">Serviço de Pioneiro</label>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <select {...register("pioneiro_tipo")} className="block w-full rounded-md border p-2">
-                                    <option value="Nenhum">Não é Pioneiro</option>
-                                    <option value="Pioneiro Regular">Pioneiro Regular</option>
-                                    <option value="Pioneiro Especial">Pioneiro Especial</option>
-                                    <option value="Missionário">Missionário</option>
-                                </select>
+                                <div>
+                                    <label className="block text-xs text-gray-600 mb-1 font-bold">Tipo de Pioneiro</label>
+                                    <select {...register("pioneiro_tipo")} className="block w-full rounded-md border p-2">
+                                        <option value="Nenhum">Não é Pioneiro</option>
+                                        <option value="Pioneiro Regular">Pioneiro Regular</option>
+                                        <option value="Pioneiro Especial">Pioneiro Especial</option>
+                                        <option value="Missionário">Missionário</option>
+                                    </select>
+                                </div>
 
-                                <input type="date" {...register("data_inicio_pioneiro")} className="block w-full rounded-md border p-2" title="Data de início no serviço de pioneiro" />
+                                <div>
+                                    <label className="block text-xs text-gray-600 mb-1 font-bold">Data de Início (Pioneiro)</label>
+                                    <input type="date" {...register("data_inicio_pioneiro")} className="block w-full rounded-md border p-2" />
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
                 <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white py-3 rounded-md hover:bg-blue-700 flex justify-center items-center gap-2 shadow-lg transition transform hover:scale-[1.01]">
-                    {loading ? "Salvando..." : <><Save size={20} /> Salvar Registro S-21</>}
+                    {loading ? "Salvando..." : (isEditMode ? <><Save size={20} /> Atualizar Cadastro</> : <><Save size={20} /> Salvar Registro S-21</>)}
                 </button>
             </form>
         </div>

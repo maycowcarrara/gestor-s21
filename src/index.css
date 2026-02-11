@@ -1,6 +1,5 @@
 @import "tailwindcss";
 
-/* Configuração do tema (v4 detecta seu tailwind.config.js automaticamente) */
 @theme {
   --color-teocratico-blue: #4a6da7;
   --color-teocratico-lightBlue: #eef2fa;
@@ -10,54 +9,77 @@
   --color-teocratico-green: #16a34a;
 }
 
+/* --- CORREÇÃO DE LAYOUT E ROLAGEM --- */
+html,
 body {
+  height: 100%;
+  /* Força altura fixa na janela */
+  width: 100%;
+  overflow: hidden;
+  /* Impede a janela inteira de rolar */
+  margin: 0;
+  padding: 0;
   background-color: var(--color-teocratico-gray);
   color: var(--color-teocratico-dark);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
-/* --- CORREÇÃO DE TAMANHO DE FONTE MOBILE --- */
+#root {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
 
-/* No celular, reduz o tamanho base da fonte para 14px em vez de 16px */
+/* --- TIPOGRAFIA RESPONSIVA --- */
 html {
   font-size: 14px;
 }
 
-/* Em tablets e PC, volta ao normal (16px) */
 @media (min-width: 768px) {
   html {
     font-size: 16px;
   }
 }
 
-/* Garante que os inputs não deem zoom no iOS (precisam ser 16px reais) */
+/* Evita zoom em inputs no iPhone */
 input,
 select,
 textarea {
   font-size: 16px !important;
 }
 
+/* --- MODO IMPRESSÃO --- */
 @media print {
 
   aside,
   nav,
   .md\:hidden,
-  button {
+  button,
+  a[href^="/"] {
     display: none !important;
+  }
+
+  /* Na impressão, precisamos permitir que o conteúdo transborde para criar páginas */
+  html,
+  body,
+  #root,
+  main {
+    height: auto !important;
+    overflow: visible !important;
+    position: static !important;
   }
 
   main {
     padding: 0 !important;
     margin: 0 !important;
-    overflow: visible !important;
   }
 
   body {
     background: white;
   }
 
-  /* Força quebra de página */
   .print\:break-after-page {
     page-break-after: always;
   }
