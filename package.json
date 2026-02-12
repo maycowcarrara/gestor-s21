@@ -1,7 +1,7 @@
 {
   "name": "gestor-s21",
   "private": true,
-  "version": "1.2.26",
+  "version": "1.5.35",
   "type": "module",
   "scripts": {
     "dev": "vite",
