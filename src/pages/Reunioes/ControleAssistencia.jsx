@@ -5,6 +5,7 @@ import { Users, ChevronLeft, ChevronRight, CheckCircle, Calendar, Save, Info } f
 import toast from 'react-hot-toast';
 import { gerarGradeSemanal } from '../../utils/assistenciaUtils';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+//import ImportarAssistencia from './ImportarAssistencia';
 
 export default function ControleAssistencia() {
     const [dataReferencia, setDataReferencia] = useState(new Date());
@@ -12,7 +13,7 @@ export default function ControleAssistencia() {
     const [semanas, setSemanas] = useState([]);
     const [loading, setLoading] = useState(true);
     const [salvandoId, setSalvandoId] = useState(null);
-    
+
     // Estado para garantir que o gráfico só renderize após a montagem final do DOM
     const [isMounted, setIsMounted] = useState(false);
 
@@ -374,6 +375,11 @@ export default function ControleAssistencia() {
                 <Info size={14} className="mt-0.5 shrink-0" />
                 <p>Os dados são salvos automaticamente ao sair do campo. O gráfico reflete as alterações em tempo real.</p>
             </div>
+            {/*<div className="mt-12 border-t pt-8">
+                <h3 className="text-gray-400 text-sm font-bold uppercase mb-4 text-center">Área Administrativa</h3>
+                <ImportarAssistencia />
+            </div> */}
         </div>
+
     );
 }
