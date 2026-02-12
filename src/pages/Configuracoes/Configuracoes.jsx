@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { db } from '../../config/firebase';
-import { doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, query, orderBy } from 'firebase/firestore';
 import { Settings, Save, Plus, Trash2, Database, Link as LinkIcon, AlertCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -131,30 +131,53 @@ export default function Configuracoes() {
     };
 
     const baixarBackup = async () => {
-        const backupData = {};
         try {
-            toast.loading("Gerando backup...");
-            const pubsSnap = await getDocs(collection(db, "publicadores"));
-            backupData.publicadores = pubsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-            const relsSnap = await getDocs(collection(db, "relatorios"));
-            backupData.relatorios = relsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            toast.loading("Preparando backup completo...");
 
-            // Inclui configs no backup também
-            const confSnap = await getDoc(doc(db, "config", "geral"));
-            if (confSnap.exists()) backupData.config = confSnap.data();
+            // Criamos as referências das promessas para buscar tudo em paralelo (mais rápido)
+            const [pubsSnap, relsSnap, asstSnap, confSnap] = await Promise.all([
+                getDocs(collection(db, "publicadores")),
+                getDocs(collection(db, "relatorios")),
+                getDocs(collection(db, "assistencia")),
+                getDoc(doc(db, "config", "geral"))
+            ]);
 
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupData));
-            const downloadAnchorNode = document.createElement('a');
-            downloadAnchorNode.setAttribute("href", dataStr);
-            downloadAnchorNode.setAttribute("download", "backup_s21_" + new Date().toISOString().slice(0, 10) + ".json");
-            document.body.appendChild(downloadAnchorNode);
-            downloadAnchorNode.click();
-            downloadAnchorNode.remove();
+            // Estruturamos o objeto de backup
+            const backupData = {
+                metadata: {
+                    data_geracao: new Date().toISOString(),
+                    versao_sistema: "1.0.0",
+                    congregacao: confSnap.exists() ? confSnap.data().nomeCongregacao : "Não informada"
+                },
+                publicadores: pubsSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+                relatorios: relsSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+                assistencia: asstSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+                config: confSnap.exists() ? confSnap.data() : null
+            };
+
+            // Gerar o arquivo Blob para download
+            const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+            const url = window.URL.createObjectURL(blob);
+
+            const dataFormatada = new Date().toISOString().slice(0, 10);
+            const nomeArquivo = `backup_s21_${dataFormatada}.json`;
+
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute("download", nomeArquivo);
+            document.body.appendChild(link);
+            link.click();
+
+            // Limpeza
+            link.parentNode.removeChild(link);
+            window.URL.revokeObjectURL(url);
 
             toast.dismiss();
-            toast.success("Backup baixado!");
+            toast.success("Backup completo baixado com sucesso!");
         } catch (error) {
-            toast.error("Erro ao gerar backup.");
+            console.error("Erro ao gerar backup:", error);
+            toast.dismiss();
+            toast.error("Falha ao gerar backup. Verifique a conexão.");
         }
     };
 
