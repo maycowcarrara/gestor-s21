@@ -27,12 +27,14 @@ export default function NovoPublicador() {
     useEffect(() => {
         const carregarDados = async () => {
             try {
+                // 1. Carrega Grupos da Configuração
                 const configRef = doc(db, "config", "geral");
                 const configSnap = await getDoc(configRef);
                 if (configSnap.exists() && configSnap.data().grupos) {
                     setListaGrupos(configSnap.data().grupos);
                 }
 
+                // 2. Se for edição, carrega dados do Publicador
                 if (isEditMode) {
                     setLoading(true);
                     const docRef = doc(db, "publicadores", id);
@@ -91,6 +93,9 @@ export default function NovoPublicador() {
                 listaPrivilegios.push(data.designacao);
             }
 
+            // Garante que salvemos apenas o nome do grupo (string), nunca o objeto
+            const grupoSalvo = data.grupo_campo;
+
             const dadosBase = {
                 dados_pessoais: {
                     nome_completo: data.nome_completo,
@@ -115,7 +120,7 @@ export default function NovoPublicador() {
                     data_batismo: (data.batizado && data.data_batismo) ? data.data_batismo : null,
                     data_inicio: data.data_inicio || null,
                     privilegios: listaPrivilegios,
-                    grupo_campo: data.grupo_campo || listaGrupos[0],
+                    grupo_campo: grupoSalvo, // Salva string
                     situacao: "Ativo",
                     pioneiro_tipo: data.pioneiro_tipo !== "Nenhum" ? data.pioneiro_tipo : null,
                     data_designacao_pioneiro: data.data_inicio_pioneiro || null
@@ -151,8 +156,6 @@ export default function NovoPublicador() {
 
     return (
         <div className="max-w-4xl mx-auto p-4 md:p-6 pb-20">
-            {/* pb-20 garante espaço extra no final para o botão salvar não colar na borda */}
-
             <div className="mb-6 flex items-center gap-3">
                 <Link to={isEditMode ? `/publicadores/${id}` : "/publicadores"} className="p-2 hover:bg-gray-200 rounded-full text-gray-500 transition">
                     <ArrowLeft size={24} />
@@ -281,10 +284,16 @@ export default function NovoPublicador() {
                             </div>
                         </div>
 
+                        {/* CORREÇÃO DO SELECT DE GRUPOS */}
                         <div className="col-span-2">
                             <label className="block text-sm font-medium text-gray-700">Grupo de Campo</label>
                             <select {...register("grupo_campo")} className="mt-1 block w-full rounded-md border p-2 bg-yellow-50 font-medium">
-                                {listaGrupos.map(g => <option key={g} value={g}>{g}</option>)}
+                                <option value="">Selecione...</option>
+                                {listaGrupos.map((g, index) => {
+                                    // Extrai o nome se for objeto, ou usa a string se for texto simples
+                                    const nomeGrupo = typeof g === 'object' ? g.nome : g;
+                                    return <option key={index} value={nomeGrupo}>{nomeGrupo}</option>;
+                                })}
                             </select>
                         </div>
 
@@ -295,9 +304,7 @@ export default function NovoPublicador() {
                                     <Star size={16} className="text-yellow-500" /> Designação / Privilégios
                                 </label>
 
-                                {/* Otimização do Grid: 1 coluna no mobile, 2 em telas médias, 4 em PC */}
                                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                                    {/* Nenhuma */}
                                     <label className="cursor-pointer h-full block">
                                         <input type="radio" value="Nenhuma" {...register("designacao")} className="peer sr-only" />
                                         <div className="rounded-lg border border-gray-200 p-3 text-center hover:bg-gray-50 peer-checked:bg-gray-100 peer-checked:border-gray-400 peer-checked:ring-1 peer-checked:ring-gray-400 transition-all h-full flex items-center justify-center">
@@ -305,7 +312,6 @@ export default function NovoPublicador() {
                                         </div>
                                     </label>
 
-                                    {/* Varão Habilitado */}
                                     <label className="cursor-pointer h-full block">
                                         <input type="radio" value="Varão Habilitado" {...register("designacao")} className="peer sr-only" />
                                         <div className="rounded-lg border border-gray-200 p-3 text-center hover:bg-green-50 peer-checked:bg-green-100 peer-checked:border-green-500 peer-checked:text-green-800 peer-checked:ring-1 peer-checked:ring-green-500 transition-all h-full flex items-center justify-center">
@@ -313,7 +319,6 @@ export default function NovoPublicador() {
                                         </div>
                                     </label>
 
-                                    {/* Servo Ministerial */}
                                     <label className="cursor-pointer h-full block">
                                         <input type="radio" value="Servo Ministerial" {...register("designacao")} className="peer sr-only" />
                                         <div className="rounded-lg border border-gray-200 p-3 text-center hover:bg-blue-50 peer-checked:bg-blue-100 peer-checked:border-blue-500 peer-checked:text-blue-800 peer-checked:ring-1 peer-checked:ring-blue-500 transition-all h-full flex items-center justify-center">
@@ -321,7 +326,6 @@ export default function NovoPublicador() {
                                         </div>
                                     </label>
 
-                                    {/* Ancião */}
                                     <label className="cursor-pointer h-full block">
                                         <input type="radio" value="Ancião" {...register("designacao")} className="peer sr-only" />
                                         <div className="rounded-lg border border-gray-200 p-3 text-center hover:bg-indigo-50 peer-checked:bg-indigo-100 peer-checked:border-indigo-500 peer-checked:text-indigo-800 peer-checked:ring-1 peer-checked:ring-indigo-500 transition-all h-full flex items-center justify-center">

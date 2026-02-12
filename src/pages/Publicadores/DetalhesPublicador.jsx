@@ -10,7 +10,6 @@ import {
 import toast from 'react-hot-toast';
 import ModalLancamento from '../../components/Relatorios/ModalLancamento';
 import { calcularFaixaEtaria } from '../../utils/helpers';
-// CORREÇÃO AQUI: Importar a função de PDF Individual
 import { gerarPDFIndividual } from '../../utils/geradorPDF';
 
 export default function DetalhesPublicador() {
@@ -274,9 +273,29 @@ export default function DetalhesPublicador() {
                             <Droplets size={16} className="text-blue-400 shrink-0" />
                             <span>Batismo: <strong>{publicador.dados_eclesiasticos.data_batismo ? new Date(publicador.dados_eclesiasticos.data_batismo + 'T12:00:00').toLocaleDateString('pt-BR') : (publicador.dados_eclesiasticos.batizado ? 'Sim (s/data)' : 'Não')}</strong></span>
                         </div>
+                        {/* --- CÓDIGO ALTERADO: DATA DINÂMICA (PIONEIRO OU CONGREGAÇÃO) --- */}
                         <div className="flex items-center gap-2 text-gray-600">
                             <Calendar size={16} className="text-green-500 shrink-0" />
-                            <span>Início na Cong.: <strong>{publicador.dados_eclesiasticos.data_inicio ? new Date(publicador.dados_eclesiasticos.data_inicio + 'T12:00:00').toLocaleDateString('pt-BR') : <span className="text-gray-400 font-normal italic">--</span>}</strong></span>
+                            <span>
+                                {/* Se for Pioneiro Regular, muda o rótulo e busca outra data */}
+                                {publicador.dados_eclesiasticos.pioneiro_tipo === 'Pioneiro Regular'
+                                    ? "Início Pioneiro: "
+                                    : "Início na Cong.: "
+                                }
+                                <strong>
+                                    {(() => {
+                                        // Decide qual data usar
+                                        const dataParaMostrar = publicador.dados_eclesiasticos.pioneiro_tipo === 'Pioneiro Regular'
+                                            ? publicador.dados_eclesiasticos.data_designacao_pioneiro
+                                            : publicador.dados_eclesiasticos.data_inicio;
+
+                                        // Formata ou mostra traço
+                                        return dataParaMostrar
+                                            ? new Date(dataParaMostrar + 'T12:00:00').toLocaleDateString('pt-BR')
+                                            : <span className="text-gray-400 font-normal italic">--</span>;
+                                    })()}
+                                </strong>
+                            </span>
                         </div>
                     </div>
 

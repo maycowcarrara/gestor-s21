@@ -1,9 +1,15 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+import packageJson from './package.json'; // 1. Importe o package.json aqui
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  // 2. Defina a variável global aqui
+  define: {
+    '__APP_VERSION__': JSON.stringify(packageJson.version),
+  },
+
   plugins: [
     react(),
     VitePWA({
@@ -38,32 +44,23 @@ export default defineConfig({
         ]
       },
       workbox: {
-        // SOLUÇÃO 1: Aumentar o limite para 4 MiB (Suficiente para seus 2.68 MB)
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
-
-        // Garante que o SW limpe caches antigos
         cleanupOutdatedCaches: true,
       }
     })
   ],
   build: {
-    // Aumenta o limite de aviso do chunk para não poluir o terminal
     chunkSizeWarningLimit: 1000,
-
     rollupOptions: {
       output: {
-        // SOLUÇÃO 2: Code Splitting (Divide o arquivo gigante em pedaços menores)
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            // Separa bibliotecas pesadas de PDF e Excel em um arquivo separado
             if (id.includes('jspdf') || id.includes('html2canvas') || id.includes('exceljs') || id.includes('jszip')) {
-              return 'heavy-libs'; // Nome do arquivo chunk
+              return 'heavy-libs';
             }
-            // Separa o Firebase (que é grande)
             if (id.includes('firebase')) {
               return 'firebase-core';
             }
-            // O resto das libs (React, etc) fica no vendor
             return 'vendor';
           }
         }
