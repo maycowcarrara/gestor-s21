@@ -25,6 +25,7 @@
     "react-hook-form": "^7.71.1",
     "react-hot-toast": "^2.6.0",
     "react-router-dom": "^7.13.0",
+    "recharts": "^3.7.0",
     "vite-plugin-pwa": "^1.2.0"
   },
   "devDependencies": {
