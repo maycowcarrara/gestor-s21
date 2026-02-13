@@ -1,14 +1,53 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../config/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
-import { Users, FileText, TrendingUp, AlertCircle, Calendar, PieChart as PieIcon, Shield, BarChart3, Users2, Smile, ArrowRight } from 'lucide-react';
+import { Users, FileText, TrendingUp, AlertCircle, Calendar, BarChart3, Users2, Smile, ArrowRight, BookOpen } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 
 // Cores
 const COLORS_SITUACAO = ['#10B981', '#F59E0B', '#EF4444', '#9CA3AF'];
 const COLORS_FAIXA = ['#38BDF8', '#818CF8', '#6366F1', '#4F46E5'];
-const COLORS_GRUPOS = ['#8B5CF6', '#A78BFA', '#C4B5FD', '#DDD6FE', '#EDE9FE'];
+// Cores para os Estudos (Pub, Aux, Reg)
+const COLORS_ESTUDOS = {
+    pub: '#9CA3AF', // Cinza para Publicadores
+    aux: '#F59E0B', // Laranja para Auxiliares
+    reg: '#10B981'  // Verde para Regulares
+};
+
+// --- COMPONENTE DE LABEL DEFINITIVO ---
+// Agora recebe "data" e "index" para buscar o valor exato, sem erros de soma
+const CustomBarLabel = (props) => {
+    const { x, y, width, height, index, pKey, data } = props;
+    
+    // 1. Se a barra tiver altura zero, não mostra nada (evita sobreposição)
+    if (!height || height === 0) return null;
+
+    // 2. Busca o valor exato no array de dados original usando o índice do mês
+    // Isso garante que mostre "17" e não "63" (o acumulado)
+    let valorReal = 0;
+    if (data && data[index] && pKey) {
+        valorReal = data[index][pKey];
+    }
+
+    // 3. Se valor for 0, não mostra
+    if (!valorReal || valorReal === 0) return null;
+
+    return (
+        <text 
+            x={x + width / 2} 
+            y={y + height / 2 + 1} 
+            fill="#fff" 
+            textAnchor="middle" 
+            dominantBaseline="middle" 
+            fontSize={10} 
+            fontWeight="bold"
+            style={{ textShadow: '0px 1px 2px rgba(0,0,0,0.8)', pointerEvents: 'none' }}
+        >
+            {valorReal}
+        </text>
+    );
+};
 
 export default function Dashboard() {
     const [stats, setStats] = useState({
@@ -19,13 +58,14 @@ export default function Dashboard() {
     
     const [dadosGrupos, setDadosGrupos] = useState([]);
     const [dadosFaixaEtaria, setDadosFaixaEtaria] = useState([]);
+    const [dadosEstudos, setDadosEstudos] = useState([]); 
+    
     const [relatoriosColetados, setRelatoriosColetados] = useState(0);
     const [totalEsperadoRelatorios, setTotalEsperadoRelatorios] = useState(0);
     const [nomeMesRelatorio, setNomeMesRelatorio] = useState("");
     const [mediaAssistencia, setMediaAssistencia] = useState({ meio: 0, fim: 0 });
     const [loading, setLoading] = useState(true);
     
-    // Controle de montagem para evitar o erro de largura/altura -1
     const [isMounted, setIsMounted] = useState(false);
 
     useEffect(() => {
@@ -36,6 +76,8 @@ export default function Dashboard() {
     const carregarTudo = async () => {
         try {
             const hoje = new Date();
+            
+            // --- 1. DATAS ---
             const dataMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
             const anoStr = dataMesAnterior.getFullYear();
             const mesStr = String(dataMesAnterior.getMonth() + 1).padStart(2, '0');
@@ -44,6 +86,7 @@ export default function Dashboard() {
             setNomeMesRelatorio(dataMesAnterior.toLocaleDateString('pt-BR', { month: 'long' }));
             const mesAtualIso = hoje.toISOString().slice(0, 7);
 
+            // --- 2. PUBLICADORES ---
             const qPubs = query(collection(db, "publicadores"));
             const snapPubs = await getDocs(qPubs);
 
@@ -55,12 +98,18 @@ export default function Dashboard() {
 
             const contagemGrupos = {};
             const contagemFaixa = { 'Crianças': 0, 'Jovens': 0, 'Adultos': 0, 'Idosos': 0 };
+            
+            // Lista de IDs válidos para filtrar relatórios "fantasmas"
+            const idsPublicadoresValidos = new Set();
 
             snapPubs.forEach((doc) => {
                 const data = doc.data();
+                const id = doc.id; 
                 const ec = data.dados_eclesiasticos || {};
                 const pess = data.dados_pessoais || {};
                 const sit = ec.situacao || "Ativo";
+
+                idsPublicadoresValidos.add(id);
 
                 novosStats.totalGeral++;
 
@@ -108,10 +157,12 @@ export default function Dashboard() {
                 { name: 'Idosos (60+)', value: contagemFaixa['Idosos'] }
             ]);
 
+            // --- 3. RELATÓRIOS DO MÊS CORRENTE ---
             const qRels = query(collection(db, "relatorios"), where("mes_referencia", "==", mesRelatorioIso));
             const snapRels = await getDocs(qRels);
             setRelatoriosColetados(snapRels.size);
 
+            // --- 4. ASSISTÊNCIA DO MÊS ---
             const qAssist = query(collection(db, "assistencia"), where("data", ">=", `${mesAtualIso}-01`), where("data", "<=", `${mesAtualIso}-31`));
             const snapAssist = await getDocs(qAssist);
             
@@ -123,6 +174,60 @@ export default function Dashboard() {
             });
 
             setMediaAssistencia({ meio: contaMeio ? Math.round(somaMeio / contaMeio) : 0, fim: contaFim ? Math.round(somaFim / contaFim) : 0 });
+
+            // --- 5. GRÁFICO DE ESTUDOS (ÚLTIMOS 12 MESES) ---
+            const mesesUltimos12 = [];
+            for (let i = 11; i >= 0; i--) {
+                const d = new Date();
+                d.setMonth(d.getMonth() - i);
+                const iso = d.toISOString().slice(0, 7); 
+                
+                const mesAbrev = d.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
+                const anoAbrev = d.getFullYear().toString().slice(-2);
+                const label = `${mesAbrev}/${anoAbrev}`; 
+
+                mesesUltimos12.push({ iso, label, pub: 0, aux: 0, reg: 0 });
+            }
+
+            const startIso = mesesUltimos12[0].iso;
+            const endIso = mesesUltimos12[11].iso;
+
+            const qEstudos = query(collection(db, "relatorios"), 
+                where("mes_referencia", ">=", startIso),
+                where("mes_referencia", "<=", endIso)
+            );
+            
+            const snapEstudos = await getDocs(qEstudos);
+
+            snapEstudos.forEach(doc => {
+                const d = doc.data();
+                
+                // Filtro anti-fantasma (mantido da versão anterior)
+                if (!idsPublicadoresValidos.has(d.id_publicador)) return;
+
+                const mes = d.mes_referencia;
+                const estudos = Number(d.atividade?.estudos || 0);
+                
+                if (estudos > 0) {
+                    const bucket = mesesUltimos12.find(m => m.iso === mes);
+                    if (bucket) {
+                        const tipoBase = d.atividade?.tipo_pioneiro_mes || 'Publicador';
+                        const isAux = d.atividade?.pioneiro_auxiliar_mes === true || tipoBase === 'Pioneiro Auxiliar';
+                        const isReg = ['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tipoBase);
+
+                        if (isReg) {
+                            bucket.reg += estudos;
+                        } else if (isAux) {
+                            bucket.aux += estudos;
+                        } else {
+                            bucket.pub += estudos;
+                        }
+                    }
+                }
+            });
+
+            setDadosEstudos(mesesUltimos12);
+
         } catch (error) { console.error("Erro dashboard:", error); } 
         finally { setLoading(false); }
     };
@@ -145,7 +250,6 @@ export default function Dashboard() {
                 <p className="text-sm text-gray-500 mt-1">Visão geral e indicadores da congregação.</p>
             </div>
 
-            {/* SEÇÃO 1: DINÂMICA */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
                 <Link to="/relatorios" className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 hover:shadow-md transition duration-200 group">
                     <div className="flex justify-between items-start mb-4">
@@ -173,7 +277,6 @@ export default function Dashboard() {
                 </Link>
             </div>
 
-            {/* SEÇÃO 2: QUADRO DE PUBLICADORES */}
             <div className="bg-white rounded-2xl shadow-sm border border-gray-200 mb-8 overflow-hidden">
                 <Link to="/publicadores" className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50 hover:bg-gray-100 transition cursor-pointer group">
                     <h3 className="font-bold text-gray-700 flex items-center gap-2 group-hover:text-teocratico-blue"><Users size={18} /> Totais <ArrowRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity" /></h3>
@@ -207,7 +310,6 @@ export default function Dashboard() {
                     </div>
 
                     <div className="p-6 flex flex-col justify-center items-center bg-gray-50/50">
-                        {/* FIX: Altura fixa no container pai e minWidth no ResponsiveContainer */}
                          <div style={{ width: '100%', height: '180px' }}>
                             {isMounted && (
                                 <ResponsiveContainer width="100%" height={180} minWidth={0} debounce={200}>
@@ -227,7 +329,6 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            {/* SEÇÃO 3: GRÁFICOS */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
                     <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><Users2 size={18} /> Por Grupo de Campo</h3>
@@ -266,7 +367,52 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            {/* SEÇÃO 4: AVISOS */}
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 mb-8">
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="font-bold text-gray-700 flex items-center gap-2">
+                        <BookOpen size={18} className="text-green-600" /> Evolução de Estudos Bíblicos
+                    </h3>
+                    <div className="flex gap-3 text-xs font-medium">
+                        <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-green-500"></div> Regular</div>
+                        <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-orange-400"></div> Auxiliar</div>
+                        <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-gray-400"></div> Publicador</div>
+                    </div>
+                </div>
+                <div style={{ width: '100%', height: '300px' }}>
+                    {isMounted && dadosEstudos.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={300} minWidth={0} debounce={200}>
+                            <BarChart data={dadosEstudos} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                                <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#9CA3AF'}} dy={10} />
+                                <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#9CA3AF'}} />
+                                <Tooltip 
+                                    cursor={{fill: '#f9fafb'}} 
+                                    contentStyle={{borderRadius: '8px', border: 'none', boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}
+                                    labelStyle={{fontWeight: 'bold', color: '#374151', marginBottom: '8px'}}
+                                />
+                                
+                                {/* USO DA LABEL CORRIGIDA PASSANDO O ARRAY DE DADOS */}
+                                <Bar dataKey="pub" name="Publicadores" stackId="a" fill={COLORS_ESTUDOS.pub} radius={[0, 0, 0, 0]} barSize={40} 
+                                    label={(props) => <CustomBarLabel {...props} pKey="pub" data={dadosEstudos} />} 
+                                />
+                                <Bar dataKey="aux" name="Pioneiros Aux." stackId="a" fill={COLORS_ESTUDOS.aux} radius={[0, 0, 0, 0]} barSize={40} 
+                                    label={(props) => <CustomBarLabel {...props} pKey="aux" data={dadosEstudos} />} 
+                                />
+                                <Bar dataKey="reg" name="Pioneiros Reg." stackId="a" fill={COLORS_ESTUDOS.reg} radius={[4, 4, 0, 0]} barSize={40} 
+                                    label={(props) => <CustomBarLabel {...props} pKey="reg" data={dadosEstudos} />} 
+                                />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    ) : (
+                        <div className="h-full flex flex-col items-center justify-center text-gray-300">
+                            <BarChart3 size={32} className="mb-2 opacity-50"/>
+                            <span className="text-sm italic">Calculando histórico de estudos...</span>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* RESTO DO CÓDIGO (SEÇÃO 4 e ATALHOS) MANTIDO... */}
             {stats.irregulares > 0 ? (
                 <div className="bg-red-50 p-4 rounded-xl border border-red-100 flex items-center gap-4 mb-8">
                     <AlertCircle className="text-red-600 shrink-0" size={24} />
@@ -279,7 +425,6 @@ export default function Dashboard() {
                 </div>
             )}
             
-            {/* ATALHOS RÁPIDOS */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <Link to="/relatorios" className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:border-blue-300 transition flex items-center gap-4 group">
                     <div className="bg-blue-100 p-3 rounded-full text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition"><FileText size={24} /></div>

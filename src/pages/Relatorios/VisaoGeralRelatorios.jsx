@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../config/firebase';
 import { collection, getDocs, query, where, orderBy, doc, getDoc, setDoc } from 'firebase/firestore';
 import {
     FileText, CheckCircle, XCircle, Filter, ChevronLeft, ChevronRight, X,
-    FileBarChart, Users, Calculator, CloudDownload, Save, AlertTriangle, Link as LinkIcon
+    FileBarChart, Users, Calculator, CloudDownload, Save, AlertTriangle, Link as LinkIcon,
+    ArrowUpDown, BookOpen, Clock, MapPin, Briefcase
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -22,12 +23,18 @@ export default function VisaoGeralRelatorios() {
     const [loading, setLoading] = useState(true);
 
     // Dados Principais
-    const [dados, setDados] = useState([]); // Dados processados para a tabela
-    const [listaPublicadores, setListaPublicadores] = useState([]); // Lista crua para comparação de nomes
+    const [dados, setDados] = useState([]); // Dados processados
+    const [listaPublicadores, setListaPublicadores] = useState([]); // Lista crua para importação
 
-    // Estados de Totais
-    const [totaisControle, setTotaisControle] = useState({ pubs: 0, horas: 0, bonus: 0, estudos: 0, pendentes: 0 });
-    const [filtroStatus, setFiltroStatus] = useState('todos');
+    // Estados de Filtro
+    const [filtroStatus, setFiltroStatus] = useState('todos'); // todos, entregue, pendente
+    const [filtroTipo, setFiltroTipo] = useState('todos'); // todos, Publicador, Pioneiro Auxiliar, Pioneiro Regular
+    const [filtroGrupo, setFiltroGrupo] = useState('todos');
+
+    // Estado de Ordenação
+    const [ordenacao, setOrdenacao] = useState({ campo: 'nome', direcao: 'asc' });
+
+    // Estatisticas S1 (Mantidas separadas pois são fixas do mês)
     const [statsS1, setStatsS1] = useState({
         publicadoresAtivos: 0, mediaAssistFimSemana: 0,
         pubs: { relatorios: 0, estudos: 0 },
@@ -52,8 +59,14 @@ export default function VisaoGeralRelatorios() {
         const anoStr = novaData.getFullYear();
         const mesStr = (novaData.getMonth() + 1).toString().padStart(2, '0');
         setMesReferencia(`${anoStr}-${mesStr}`);
+        resetarFiltros();
+        setDadosImportacao([]);
+    };
+
+    const resetarFiltros = () => {
         setFiltroStatus('todos');
-        setDadosImportacao([]); // Limpa importação ao mudar mês para evitar confusão
+        setFiltroTipo('todos');
+        setFiltroGrupo('todos');
     };
 
     const carregarConfigGrupos = async () => {
@@ -62,7 +75,6 @@ export default function VisaoGeralRelatorios() {
             const docSnap = await getDoc(docRef);
             if (docSnap.exists()) {
                 const data = docSnap.data();
-                // Filtra apenas grupos que têm link configurado
                 const gruposComLink = (data.grupos || []).filter(g => g.link_csv && g.link_csv.trim() !== "");
                 setGruposConfig(gruposComLink);
             }
@@ -77,7 +89,6 @@ export default function VisaoGeralRelatorios() {
             const qPubs = query(collection(db, "publicadores"), orderBy("dados_pessoais.nome_completo"));
             const snapPubs = await getDocs(qPubs);
 
-            // Guarda a lista crua para usar na importação (Match de Nomes)
             const listaPura = snapPubs.docs.map(d => ({ id: d.id, ...d.data() }));
             setListaPublicadores(listaPura);
 
@@ -90,13 +101,10 @@ export default function VisaoGeralRelatorios() {
                 mapaRelatorios[data.id_publicador] = data;
             });
 
-            // ... (Lógica de processamento existente: Totais Controle e S-1) ...
-            // Vou simplificar aqui para não estourar o limite, mantendo a lógica original
-
             const [anoRef, mesRefNum] = mesReferencia.split('-').map(Number);
             const dataFimMesReferencia = new Date(anoRef, mesRefNum, 0);
 
-            let somaHorasReais = 0, somaBonus = 0, somaEstudos = 0, countPendentes = 0, totalAtivosS1 = 0;
+            let totalAtivosS1 = 0;
 
             const listaCombinada = listaPura.map(pub => {
                 const situacao = pub.dados_eclesiasticos.situacao;
@@ -111,41 +119,49 @@ export default function VisaoGeralRelatorios() {
                 const relatorio = mapaRelatorios[pub.id];
                 const entregue = !!relatorio;
 
-                if (entregue) {
-                    somaHorasReais += (relatorio.atividade.horas || 0);
-                    somaBonus += (relatorio.atividade.bonus_horas || 0);
-                    somaEstudos += (relatorio.atividade.estudos || 0);
-                } else {
-                    countPendentes++;
+                // --- CORREÇÃO DA LÓGICA DE TIPO ---
+                let tipoCalculado = pub.dados_eclesiasticos.pioneiro_tipo || "Publicador";
+
+                // Se houver relatório entregue, respeita o que foi relatado no mês
+                if (entregue && relatorio.atividade) {
+                    // Prioridade 1: Flag específica de Auxiliar (comum na importação ou checkbox)
+                    if (relatorio.atividade.pioneiro_auxiliar_mes === true) {
+                        tipoCalculado = "Pioneiro Auxiliar";
+                    }
+                    // Prioridade 2: Tipo salvo no relatório (ex: Pioneer Regular mudou pra Especial)
+                    else if (relatorio.atividade.tipo_pioneiro_mes) {
+                        tipoCalculado = relatorio.atividade.tipo_pioneiro_mes;
+                    }
                 }
+                // ----------------------------------
 
                 return {
                     id: pub.id,
                     nome: pub.dados_pessoais.nome_completo,
                     grupo: pub.dados_eclesiasticos.grupo_campo || "Sem Grupo",
-                    tipo: pub.dados_eclesiasticos.pioneiro_tipo || "Publicador",
+                    tipo: tipoCalculado, // Usa o tipo calculado dinamicamente
                     entregue,
                     relatorio
                 };
             }).filter(item => item !== null);
 
             setDados(listaCombinada);
-            setTotaisControle({ pubs: listaCombinada.length, horas: somaHorasReais, bonus: somaBonus, estudos: somaEstudos, pendentes: countPendentes });
 
-            // ... (Lógica S-1 mantida idêntica à anterior) ...
-            // Recalculando S1 rápido para manter funcionalidade
+            // Lógica S-1 simplificada (Mantida para aba S-1)
             const statsAux = { publicadoresAtivos: totalAtivosS1, mediaAssistFimSemana: 0, pubs: { relatorios: 0, estudos: 0 }, aux: { relatorios: 0, horas: 0, estudos: 0 }, reg: { relatorios: 0, horas: 0, estudos: 0 } };
-
             snapRel.forEach(doc => {
                 const d = doc.data();
                 if (d.atividade.participou) {
                     const h = d.atividade.horas || 0; const e = d.atividade.estudos || 0; const t = d.atividade.tipo_pioneiro_mes;
+
+                    // Verifica também a flag de auxiliar aqui para a estatística bater
+                    const isAux = t === 'Pioneiro Auxiliar' || d.atividade.pioneiro_auxiliar_mes === true;
+
                     if (['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(t)) { statsAux.reg.relatorios++; statsAux.reg.horas += h; statsAux.reg.estudos += e; }
-                    else if (t === 'Pioneiro Auxiliar') { statsAux.aux.relatorios++; statsAux.aux.horas += h; statsAux.aux.estudos += e; }
+                    else if (isAux) { statsAux.aux.relatorios++; statsAux.aux.horas += h; statsAux.aux.estudos += e; }
                     else { statsAux.pubs.relatorios++; statsAux.pubs.estudos += e; }
                 }
             });
-            // Assistencia (Dummy logic para manter estrutura, você já tem a query completa no original)
             setStatsS1(statsAux);
 
         } catch (error) {
@@ -155,141 +171,128 @@ export default function VisaoGeralRelatorios() {
         }
     };
 
-    // --- FUNÇÕES DE IMPORTAÇÃO ---
+    // --- EXTRAÇÃO DE GRUPOS DISPONÍVEIS ---
+    const gruposDisponiveis = useMemo(() => {
+        const grupos = dados.map(d => d.grupo).filter(g => g !== "Sem Grupo");
+        return [...new Set(grupos)].sort();
+    }, [dados]);
 
+    // --- LÓGICA DE FILTRO E ORDENAÇÃO ---
+    const dadosProcessados = useMemo(() => {
+        // 1. Filtragem
+        let lista = dados.filter(item => {
+            // Filtro Status
+            if (filtroStatus === 'entregue' && !item.entregue) return false;
+            if (filtroStatus === 'pendente' && item.entregue) return false;
+
+            // Filtro Tipo
+            if (filtroTipo !== 'todos' && item.tipo !== filtroTipo) return false;
+
+            // Filtro Grupo
+            if (filtroGrupo !== 'todos' && item.grupo !== filtroGrupo) return false;
+
+            return true;
+        });
+
+        // 2. Ordenação
+        return lista.sort((a, b) => {
+            let valorA, valorB;
+            switch (ordenacao.campo) {
+                case 'nome': valorA = a.nome; valorB = b.nome; break;
+                case 'grupo': valorA = a.grupo; valorB = b.grupo; break;
+                case 'status': valorA = a.entregue ? 1 : 0; valorB = b.entregue ? 1 : 0; break;
+                case 'horas': valorA = a.entregue ? (a.relatorio.atividade.horas || 0) : -1; valorB = b.entregue ? (b.relatorio.atividade.horas || 0) : -1; break;
+                case 'estudos': valorA = a.entregue ? (a.relatorio.atividade.estudos || 0) : -1; valorB = b.entregue ? (b.relatorio.atividade.estudos || 0) : -1; break;
+                default: return 0;
+            }
+            if (valorA < valorB) return ordenacao.direcao === 'asc' ? -1 : 1;
+            if (valorA > valorB) return ordenacao.direcao === 'asc' ? 1 : -1;
+            return 0;
+        });
+    }, [dados, filtroStatus, filtroTipo, filtroGrupo, ordenacao]);
+
+    // --- CÁLCULO DE TOTAIS DINÂMICOS (Baseado no filtro de Tipo e Grupo) ---
+    // Nota: O filtroStatus é ignorado aqui para que os cards mostrem o total "Entregue vs Pendente" dentro do Grupo/Tipo selecionado.
+    const totaisDinamicos = useMemo(() => {
+        let listaBase = dados.filter(item => {
+            if (filtroTipo !== 'todos' && item.tipo !== filtroTipo) return false;
+            if (filtroGrupo !== 'todos' && item.grupo !== filtroGrupo) return false;
+            return true;
+        });
+
+        const total = listaBase.length;
+        const pendentes = listaBase.filter(i => !i.entregue).length;
+        const entregues = listaBase.filter(i => i.entregue).length;
+
+        return { total, pendentes, entregues };
+    }, [dados, filtroTipo, filtroGrupo]);
+
+    const manipularOrdenacao = (campo) => {
+        setOrdenacao(prev => ({
+            campo,
+            direcao: prev.campo === campo && prev.direcao === 'asc' ? 'desc' : 'asc'
+        }));
+    };
+
+    const SortIcon = ({ campo }) => {
+        if (ordenacao.campo !== campo) return <ArrowUpDown size={14} className="text-gray-300 ml-1" />;
+        return <ArrowUpDown size={14} className={`ml-1 ${ordenacao.direcao === 'asc' ? 'text-blue-600' : 'text-blue-600 transform rotate-180'}`} />;
+    };
+
+    // --- FUNÇÕES DE IMPORTAÇÃO (Mantidas do código anterior) ---
     const buscarCSV = async () => {
         if (!grupoSelecionado) { toast.error("Selecione um grupo."); return; }
-
         const configGrupo = gruposConfig.find(g => g.nome === grupoSelecionado);
         if (!configGrupo || !configGrupo.link_csv) { toast.error("Grupo sem link configurado."); return; }
-
         setProcessandoImportacao(true);
         try {
             const rawData = await buscarRelatoriosCSV(configGrupo.link_csv);
-
             const dadosProcessados = rawData.map(row => {
                 const nomePlanilha = row['Nome Completo'] || row['Nome'] || "Desconhecido";
-
                 const normalize = str => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
                 const match = listaPublicadores.find(p => normalize(p.dados_pessoais.nome_completo) === normalize(nomePlanilha));
-
                 const relExistente = dados.find(d => d.id === match?.id && d.entregue);
-
                 return {
-                    csvOriginal: row,
-                    nomeCSV: nomePlanilha,
-                    matchId: match ? match.id : null,
-                    matchNome: match ? match.dados_pessoais.nome_completo : null,
-                    status: !match ? 'erro_nome' : (relExistente ? 'atualizar' : 'novo'),
-
-                    // DADOS DO RELATÓRIO
-                    mes: mesReferencia,
-                    horas: Number(row['Horas'] || 0),
-                    estudos: Number(row['Estudos'] || 0),
-                    observacoes: row['Observações'] || "",
-                    horasBonus: row['horasBonus'] || 0, // Bônus vindo do importadorService
-                    participou: (row['Participou'] || "Sim") === "Sim",
-
-                    // CAPTURA O TIPO DA PLANILHA (Ex: "Pioneiro Auxiliar")
-                    tipoCSV: row['Tipo'] || ""
+                    csvOriginal: row, nomeCSV: nomePlanilha, matchId: match ? match.id : null, matchNome: match ? match.dados_pessoais.nome_completo : null, status: !match ? 'erro_nome' : (relExistente ? 'atualizar' : 'novo'), mes: mesReferencia, horas: Number(row['Horas'] || 0), estudos: Number(row['Estudos'] || 0), observacoes: row['Observações'] || "", horasBonus: row['horasBonus'] || 0, participou: (row['Participou'] || "Sim") === "Sim", tipoCSV: row['Tipo'] || ""
                 };
             }).filter(item => item.nomeCSV !== "Desconhecido");
-
             setDadosImportacao(dadosProcessados);
             toast.success(`${dadosProcessados.length} linhas encontradas.`);
-        } catch (error) {
-            console.error(error);
-            toast.error("Erro ao ler CSV.");
-        } finally {
-            setProcessandoImportacao(false);
-        }
+        } catch (error) { console.error(error); toast.error("Erro ao ler CSV."); } finally { setProcessandoImportacao(false); }
     };
 
-    // --- FUNÇÃO PARA EDITAR DADOS NA TABELA DE IMPORTAÇÃO ---
     const atualizarItemImportacao = (index, campo, valor) => {
         const novosDados = [...dadosImportacao];
-
-        // Atualiza o campo editado
         novosDados[index][campo] = valor;
-
-        // SE O USUÁRIO TROCOU O NOME (MATCH MANUAL)
         if (campo === 'matchId') {
-            if (valor === "") {
-                // Se limpou o campo
-                novosDados[index].matchId = null;
-                novosDados[index].matchNome = null;
-                novosDados[index].status = 'erro_nome';
-            } else {
-                // Se selecionou alguém
-                const pub = listaPublicadores.find(p => p.id === valor);
-                novosDados[index].matchNome = pub.dados_pessoais.nome_completo;
-
-                // Recalcula o status (Novo ou Atualizar)
-                const relExistente = dados.find(d => d.id === valor && d.entregue);
-                novosDados[index].status = relExistente ? 'atualizar' : 'novo';
-            }
+            if (valor === "") { novosDados[index].matchId = null; novosDados[index].matchNome = null; novosDados[index].status = 'erro_nome'; }
+            else { const pub = listaPublicadores.find(p => p.id === valor); novosDados[index].matchNome = pub.dados_pessoais.nome_completo; const relExistente = dados.find(d => d.id === valor && d.entregue); novosDados[index].status = relExistente ? 'atualizar' : 'novo'; }
         }
-
         setDadosImportacao(novosDados);
     };
 
     const salvarImportacao = async () => {
         const validos = dadosImportacao.filter(d => d.matchId);
-        if (validos.length === 0) { toast.error("Nenhum dado válido para importar."); return; }
-
+        if (validos.length === 0) { toast.error("Nenhum dado válido."); return; }
         setProcessandoImportacao(true);
         try {
             let count = 0;
             for (const item of validos) {
-                // Recupera dados do publicador para saber se é pioneiro (para salvar o tipo correto no histórico)
                 const pubData = listaPublicadores.find(p => p.id === item.matchId);
                 const tipoPioneiro = pubData?.dados_eclesiasticos?.pioneiro_tipo || "Publicador";
-
-                const idRelatorio = `${item.matchId}_${mesReferencia}`; // Força salvar no mês que está na tela
-
-                const payload = {
-                    id_publicador: item.matchId,
-                    mes_referencia: mesReferencia,
-                    ano_servico: parseInt(mesReferencia.split('-')[0]) + (parseInt(mesReferencia.split('-')[1]) >= 9 ? 1 : 0),
-                    atividade: {
-                        participou: item.participou,
-                        horas: item.horas,
-                        bonus_horas: item.horasBonus || 0,
-                        estudos: item.estudos,
-                        observacoes: item.observacoes,
-                        tipo_pioneiro_mes: tipoPioneiro, // Salva o status atual dele
-                        pioneiro_auxiliar_mes: false // CSV geralmente não diz isso, melhor deixar false ou criar coluna na planilha
-                    },
-                    data_envio: new Date().toISOString(),
-                    origem: "importacao_csv"
-                };
-
+                const idRelatorio = `${item.matchId}_${mesReferencia}`;
+                const payload = { id_publicador: item.matchId, mes_referencia: mesReferencia, ano_servico: parseInt(mesReferencia.split('-')[0]) + (parseInt(mesReferencia.split('-')[1]) >= 9 ? 1 : 0), atividade: { participou: item.participou, horas: item.horas, bonus_horas: item.horasBonus || 0, estudos: item.estudos, observacoes: item.observacoes, tipo_pioneiro_mes: tipoPioneiro, pioneiro_auxiliar_mes: false }, data_envio: new Date().toISOString(), origem: "importacao_csv" };
                 await setDoc(doc(db, "relatorios", idRelatorio), payload, { merge: true });
                 count++;
             }
-            toast.success(`${count} relatórios importados!`);
-            setDadosImportacao([]);
-            carregarDadosCompletos(); // Atualiza a tela principal
-            setAbaAtiva('controle'); // Volta para o controle
-        } catch (error) {
-            console.error(error);
-            toast.error("Erro ao salvar no banco.");
-        } finally {
-            setProcessandoImportacao(false);
-        }
+            toast.success(`${count} importados!`); setDadosImportacao([]); carregarDadosCompletos(); setAbaAtiva('controle');
+        } catch (error) { console.error(error); toast.error("Erro ao salvar."); } finally { setProcessandoImportacao(false); }
     };
-
-    const dadosFiltrados = dados.filter(item => {
-        if (filtroStatus === 'todos') return true;
-        if (filtroStatus === 'entregue') return item.entregue;
-        if (filtroStatus === 'pendente') return !item.entregue;
-        return true;
-    });
 
     return (
         <div className="p-4 md:p-6 max-w-6xl mx-auto pb-24">
 
-            {/* HEADER E SELETOR DE MÊS */}
+            {/* HEADER */}
             <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
                 <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
                     <FileText className="text-teocratico-blue" /> Relatórios de Campo
@@ -297,20 +300,20 @@ export default function VisaoGeralRelatorios() {
                 <div className="flex items-center gap-2 bg-white p-1.5 rounded-lg shadow-sm border border-gray-300 select-none">
                     <button onClick={() => mudarMes(-1)} className="p-1 hover:bg-gray-100 rounded-md text-gray-600 transition"><ChevronLeft size={24} /></button>
                     <div className="relative">
-                        <input type="month" value={mesReferencia} onChange={(e) => { setMesReferencia(e.target.value); setFiltroStatus('todos'); }} className="opacity-0 absolute inset-0 w-full cursor-pointer" />
+                        <input type="month" value={mesReferencia} onChange={(e) => { setMesReferencia(e.target.value); resetarFiltros(); }} className="opacity-0 absolute inset-0 w-full cursor-pointer" />
                         <span className="text-gray-800 font-bold text-lg px-2 py-1 block w-32 text-center pointer-events-none">{mesReferencia.split('-').reverse().join('/')}</span>
                     </div>
                     <button onClick={() => mudarMes(1)} className="p-1 hover:bg-gray-100 rounded-md text-gray-600 transition"><ChevronRight size={24} /></button>
                 </div>
             </div>
 
-            {/* NAVEGAÇÃO DE ABAS */}
+            {/* ABAS */}
             <div className="flex gap-2 mb-6 border-b border-gray-200 overflow-x-auto">
                 <button onClick={() => setAbaAtiva('controle')} className={`px-4 py-2 font-medium text-sm rounded-t-lg transition whitespace-nowrap ${abaAtiva === 'controle' ? 'bg-white border-x border-t border-gray-200 text-blue-600' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>
                     Controle Mensal
                 </button>
                 <button onClick={() => setAbaAtiva('s1')} className={`px-4 py-2 font-medium text-sm rounded-t-lg transition flex items-center gap-2 whitespace-nowrap ${abaAtiva === 's1' ? 'bg-white border-x border-t border-gray-200 text-blue-600' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>
-                    <FileBarChart size={16} /> Totais S-1 (Betel)
+                    <FileBarChart size={16} /> Totais S-1
                 </button>
                 <button onClick={() => setAbaAtiva('importacao')} className={`px-4 py-2 font-medium text-sm rounded-t-lg transition flex items-center gap-2 whitespace-nowrap ${abaAtiva === 'importacao' ? 'bg-white border-x border-t border-gray-200 text-green-600' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>
                     <CloudDownload size={16} /> Importar (CSV)
@@ -321,65 +324,117 @@ export default function VisaoGeralRelatorios() {
                 <div className="text-center p-12 text-gray-500"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>Carregando...</div>
             ) : (
                 <>
-                    {/* ABA: CONTROLE MENSAL (CÓDIGO ANTERIOR MANTIDO) */}
+                    {/* ABA: CONTROLE MENSAL */}
                     {abaAtiva === 'controle' && (
                         <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                            {/* ... (Cards de Totais e Tabela existentes) ... */}
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                                <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
-                                    <span className="text-xs text-gray-500 uppercase font-bold">Total Horas</span>
-                                    <div className="flex items-baseline gap-1">
-                                        <span className="text-2xl font-bold text-blue-600">{Math.floor(totaisControle.horas)}</span>
-                                        {totaisControle.bonus > 0 && <span className="text-sm text-yellow-600 font-medium">+{Math.floor(totaisControle.bonus)}</span>}
+
+                            {/* LINHA 1: PLACAR (ENTREGUES vs PENDENTES) */}
+                            <div className="grid grid-cols-2 gap-4 mb-4">
+                                <div
+                                    onClick={() => setFiltroStatus(filtroStatus === 'entregue' ? 'todos' : 'entregue')}
+                                    className={`p-5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between h-28 ${filtroStatus === 'entregue' ? 'bg-blue-600 text-white border-blue-700 ring-4 ring-blue-100' : 'bg-white border-gray-200 text-gray-700 hover:border-blue-300'}`}
+                                >
+                                    <div className="flex justify-between items-start">
+                                        <span className={`text-xs font-bold uppercase tracking-wider ${filtroStatus === 'entregue' ? 'text-blue-200' : 'text-gray-400'}`}>Entregues</span>
+                                        <CheckCircle size={20} className={filtroStatus === 'entregue' ? 'text-white' : 'text-green-500'} />
+                                    </div>
+                                    <div className="text-3xl font-bold">
+                                        {totaisDinamicos.entregues}
+                                        <span className={`text-sm font-normal ml-2 ${filtroStatus === 'entregue' ? 'text-blue-200' : 'text-gray-400'}`}>/ {totaisDinamicos.total}</span>
                                     </div>
                                 </div>
-                                <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
-                                    <span className="text-xs text-gray-500 uppercase font-bold">Estudos</span>
-                                    <div className="text-2xl font-bold text-green-600">{totaisControle.estudos}</div>
-                                </div>
-                                <div onClick={() => setFiltroStatus(filtroStatus === 'entregue' ? 'todos' : 'entregue')} className={`p-4 rounded-xl shadow-sm border cursor-pointer transition-all ${filtroStatus === 'entregue' ? 'bg-blue-50 border-blue-400 ring-2 ring-blue-100' : 'bg-white border-gray-200 hover:border-blue-300'}`}>
-                                    <div className="flex justify-between items-start"><span className="text-xs text-gray-500 uppercase font-bold">Entregues</span>{filtroStatus === 'entregue' && <Filter size={14} className="text-blue-500" />}</div>
-                                    <div className="text-2xl font-bold text-gray-700">{totaisControle.pubs - totaisControle.pendentes} <span className="text-sm text-gray-400 font-normal">/ {totaisControle.pubs}</span></div>
-                                </div>
-                                <div onClick={() => setFiltroStatus(filtroStatus === 'pendente' ? 'todos' : 'pendente')} className={`p-4 rounded-xl shadow-sm border cursor-pointer transition-all ${filtroStatus === 'pendente' ? 'bg-red-50 border-red-400 ring-2 ring-red-100' : (totaisControle.pendentes > 0 ? 'bg-red-50 border-red-100 hover:border-red-300' : 'bg-green-50 border-green-100')}`}>
-                                    <div className="flex justify-between items-start"><span className="text-xs text-gray-500 uppercase font-bold">Pendentes</span>{filtroStatus === 'pendente' && <Filter size={14} className="text-red-500" />}</div>
-                                    <div className={`text-2xl font-bold ${totaisControle.pendentes > 0 ? 'text-red-600' : 'text-green-600'}`}>{totaisControle.pendentes}</div>
+
+                                <div
+                                    onClick={() => setFiltroStatus(filtroStatus === 'pendente' ? 'todos' : 'pendente')}
+                                    className={`p-5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between h-28 ${filtroStatus === 'pendente' ? 'bg-red-600 text-white border-red-700 ring-4 ring-red-100' : 'bg-white border-gray-200 text-gray-700 hover:border-red-300'}`}
+                                >
+                                    <div className="flex justify-between items-start">
+                                        <span className={`text-xs font-bold uppercase tracking-wider ${filtroStatus === 'pendente' ? 'text-red-200' : 'text-gray-400'}`}>Pendentes</span>
+                                        <XCircle size={20} className={filtroStatus === 'pendente' ? 'text-white' : 'text-red-500'} />
+                                    </div>
+                                    <div className="text-3xl font-bold">
+                                        {totaisDinamicos.pendentes}
+                                        <span className={`text-sm font-normal ml-2 ${filtroStatus === 'pendente' ? 'text-red-200' : 'text-gray-400'}`}>/ {totaisDinamicos.total}</span>
+                                    </div>
                                 </div>
                             </div>
 
-                            {filtroStatus !== 'todos' && (
-                                <div className="mb-4 flex items-center gap-2">
-                                    <span className="text-sm text-gray-500">Exibindo apenas:</span>
-                                    <span className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 shadow-sm ${filtroStatus === 'entregue' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
-                                        {filtroStatus === 'entregue' ? 'Entregues' : 'Pendentes'}
-                                        <button onClick={() => setFiltroStatus('todos')} className="hover:text-black rounded-full p-0.5 hover:bg-white/20"><X size={14} /></button>
-                                    </span>
+                            {/* LINHA 2: BARRA DE FERRAMENTAS E FILTROS */}
+                            <div className="bg-gray-100 p-3 rounded-lg border border-gray-200 flex flex-col md:flex-row gap-3 items-center mb-4 shadow-inner">
+                                <div className="text-gray-500 flex items-center gap-2 text-sm font-medium w-full md:w-auto">
+                                    <Filter size={16} /> Filtros:
                                 </div>
-                            )}
 
-                            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                                <div className="relative w-full md:w-auto flex-1">
+                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500"><Briefcase size={14} /></div>
+                                    <select
+                                        value={filtroTipo}
+                                        onChange={(e) => setFiltroTipo(e.target.value)}
+                                        className="pl-9 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm py-2"
+                                    >
+                                        <option value="todos">Todos os Tipos</option>
+                                        <option value="Publicador">Publicadores</option>
+                                        <option value="Pioneiro Auxiliar">Pioneiros Auxiliares</option>
+                                        <option value="Pioneiro Regular">Pioneiros Regulares</option>
+                                    </select>
+                                </div>
+
+                                <div className="relative w-full md:w-auto flex-1">
+                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500"><MapPin size={14} /></div>
+                                    <select
+                                        value={filtroGrupo}
+                                        onChange={(e) => setFiltroGrupo(e.target.value)}
+                                        className="pl-9 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm py-2"
+                                    >
+                                        <option value="todos">Todos os Grupos</option>
+                                        {gruposDisponiveis.map(g => (
+                                            <option key={g} value={g}>{g}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {(filtroTipo !== 'todos' || filtroGrupo !== 'todos') && (
+                                    <button onClick={resetarFiltros} className="text-xs text-red-600 hover:text-red-800 font-medium whitespace-nowrap px-2">
+                                        Limpar Filtros
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* --- VISUALIZAÇÃO EM TABELA (DESKTOP) --- */}
+                            <div className="hidden md:block bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                                 <div className="overflow-x-auto">
                                     <table className="w-full text-sm text-left">
                                         <thead className="bg-gray-50 text-gray-600 font-medium border-b">
                                             <tr>
-                                                <th className="px-6 py-3">Publicador</th>
-                                                <th className="px-6 py-3 hidden md:table-cell">Grupo</th>
-                                                <th className="px-6 py-3 text-center">Status</th>
-                                                <th className="px-6 py-3 text-center">Horas</th>
+                                                <th onClick={() => manipularOrdenacao('nome')} className="px-6 py-3 cursor-pointer hover:bg-gray-100 select-none">
+                                                    <div className="flex items-center">Publicador <SortIcon campo="nome" /></div>
+                                                </th>
+                                                <th onClick={() => manipularOrdenacao('grupo')} className="px-6 py-3 cursor-pointer hover:bg-gray-100 select-none">
+                                                    <div className="flex items-center">Grupo <SortIcon campo="grupo" /></div>
+                                                </th>
+                                                <th onClick={() => manipularOrdenacao('status')} className="px-6 py-3 text-center cursor-pointer hover:bg-gray-100 select-none">
+                                                    <div className="flex items-center justify-center">Status <SortIcon campo="status" /></div>
+                                                </th>
+                                                <th onClick={() => manipularOrdenacao('horas')} className="px-6 py-3 text-center cursor-pointer hover:bg-gray-100 select-none">
+                                                    <div className="flex items-center justify-center">Horas <SortIcon campo="horas" /></div>
+                                                </th>
+                                                <th onClick={() => manipularOrdenacao('estudos')} className="px-6 py-3 text-center cursor-pointer hover:bg-gray-100 select-none">
+                                                    <div className="flex items-center justify-center">Estudos <SortIcon campo="estudos" /></div>
+                                                </th>
                                                 <th className="px-6 py-3 text-center">Ação</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-100">
-                                            {dadosFiltrados.length === 0 ? (
-                                                <tr><td colSpan="5" className="p-8 text-center text-gray-500">Nenhum registro encontrado.</td></tr>
+                                            {dadosProcessados.length === 0 ? (
+                                                <tr><td colSpan="6" className="p-8 text-center text-gray-500">Nenhum registro encontrado para os filtros selecionados.</td></tr>
                                             ) : (
-                                                dadosFiltrados.map(pub => (
+                                                dadosProcessados.map(pub => (
                                                     <tr key={pub.id} className="hover:bg-gray-50 transition duration-150">
                                                         <td className="px-6 py-3">
                                                             <div className="font-medium text-gray-800"><Link to={`/publicadores/${pub.id}`} className="hover:text-blue-600 hover:underline">{pub.nome}</Link></div>
                                                             <div className="text-xs text-gray-400">{pub.tipo}</div>
                                                         </td>
-                                                        <td className="px-6 py-3 text-gray-600 hidden md:table-cell">{pub.grupo}</td>
+                                                        <td className="px-6 py-3 text-gray-600">{pub.grupo}</td>
                                                         <td className="px-6 py-3 text-center">
                                                             {pub.entregue ? <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-bold border border-green-200"><CheckCircle size={12} /> Entregue</span> : <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-bold border border-red-200"><XCircle size={12} /> Pendente</span>}
                                                         </td>
@@ -391,9 +446,12 @@ export default function VisaoGeralRelatorios() {
                                                                 </div>
                                                             ) : '-'}
                                                         </td>
+                                                        <td className="px-6 py-3 text-center text-gray-600">
+                                                            {pub.entregue ? (pub.relatorio.atividade.estudos || 0) : '-'}
+                                                        </td>
                                                         <td className="px-6 py-3 text-center">
                                                             <Link to={`/publicadores/${pub.id}`} className={`text-xs font-medium px-3 py-1.5 rounded-lg transition hover:shadow-sm ${pub.entregue ? 'text-blue-600 bg-blue-50 hover:bg-blue-100' : 'text-red-600 bg-red-50 hover:bg-red-100'}`}>
-                                                                {pub.entregue ? 'Ver Detalhes' : 'Lançar Agora'}
+                                                                {pub.entregue ? 'Ver' : 'Lançar'}
                                                             </Link>
                                                         </td>
                                                     </tr>
@@ -403,13 +461,61 @@ export default function VisaoGeralRelatorios() {
                                     </table>
                                 </div>
                             </div>
+
+                            {/* --- VISUALIZAÇÃO EM CARDS (MOBILE) --- */}
+                            <div className="md:hidden space-y-3">
+                                {dadosProcessados.length === 0 ? (
+                                    <div className="p-8 text-center text-gray-500 bg-white rounded-xl border border-gray-200">Nenhum registro encontrado.</div>
+                                ) : (
+                                    dadosProcessados.map(pub => (
+                                        <div key={pub.id} className="bg-white rounded-xl p-4 shadow-sm border border-gray-200">
+                                            <div className="flex justify-between items-start mb-3">
+                                                <div>
+                                                    <div className="font-bold text-gray-800 text-lg leading-tight">
+                                                        <Link to={`/publicadores/${pub.id}`} className="hover:text-blue-600">{pub.nome}</Link>
+                                                    </div>
+                                                    <div className="text-xs text-gray-500 mt-0.5">{pub.tipo} • {pub.grupo}</div>
+                                                </div>
+                                                {pub.entregue ?
+                                                    <div className="bg-green-100 p-1.5 rounded-full text-green-700"><CheckCircle size={18} /></div> :
+                                                    <div className="bg-red-100 p-1.5 rounded-full text-red-700"><XCircle size={18} /></div>
+                                                }
+                                            </div>
+
+                                            {pub.entregue ? (
+                                                <div className="grid grid-cols-2 gap-2 mb-3">
+                                                    <div className="bg-gray-50 rounded-lg p-2 flex flex-col items-center">
+                                                        <span className="text-xs text-gray-500 flex items-center gap-1"><Clock size={12} /> Horas</span>
+                                                        <div className="font-bold text-lg text-gray-800">
+                                                            {Math.floor(pub.relatorio.atividade.horas || 0)}
+                                                            {(pub.relatorio.atividade.bonus_horas || 0) > 0 && <span className="text-yellow-600 text-xs ml-1">+{Math.floor(pub.relatorio.atividade.bonus_horas)}</span>}
+                                                        </div>
+                                                    </div>
+                                                    <div className="bg-gray-50 rounded-lg p-2 flex flex-col items-center">
+                                                        <span className="text-xs text-gray-500 flex items-center gap-1"><BookOpen size={12} /> Estudos</span>
+                                                        <div className="font-bold text-lg text-gray-800">{pub.relatorio.atividade.estudos || 0}</div>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className="bg-red-50 text-red-600 text-xs font-medium p-2 rounded-lg text-center mb-3">
+                                                    Relatório não entregue
+                                                </div>
+                                            )}
+
+                                            <Link to={`/publicadores/${pub.id}`} className={`block w-full text-center py-2 rounded-lg font-medium text-sm transition ${pub.entregue ? 'bg-blue-50 text-blue-600 hover:bg-blue-100' : 'bg-red-50 text-red-600 hover:bg-red-100'}`}>
+                                                {pub.entregue ? 'Ver Detalhes do Relatório' : 'Lançar Relatório Agora'}
+                                            </Link>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+
                         </div>
                     )}
 
                     {/* ABA: TOTAIS S-1 */}
                     {abaAtiva === 's1' && (
                         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                            {/* ... (Mantive o mesmo conteúdo S-1 do seu código) ... */}
                             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div className="flex flex-col">
                                     <span className="text-sm font-medium text-gray-500 uppercase">Publicadores Ativos</span>
@@ -454,16 +560,13 @@ export default function VisaoGeralRelatorios() {
                         </div>
                     )}
 
-                    {/* NOVA ABA: IMPORTAÇÃO CSV */}
+                    {/* ABA: IMPORTAÇÃO CSV */}
                     {abaAtiva === 'importacao' && (
                         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-
-                            {/* SELETOR DE GRUPO */}
                             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                                 <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
                                     <LinkIcon size={18} /> Sincronizar Grupo
                                 </h3>
-
                                 {gruposConfig.length === 0 ? (
                                     <div className="text-center text-gray-500 py-4 bg-gray-50 rounded-lg border border-dashed border-gray-300">
                                         <p>Nenhum grupo com link configurado.</p>
@@ -473,43 +576,27 @@ export default function VisaoGeralRelatorios() {
                                     <div className="flex flex-col md:flex-row gap-4 items-end">
                                         <div className="w-full md:w-1/2">
                                             <label className="block text-sm font-medium text-gray-600 mb-1">Selecione o Grupo:</label>
-                                            <select
-                                                value={grupoSelecionado}
-                                                onChange={(e) => setGrupoSelecionado(e.target.value)}
-                                                className="w-full border border-gray-300 p-2 rounded-lg"
-                                            >
+                                            <select value={grupoSelecionado} onChange={(e) => setGrupoSelecionado(e.target.value)} className="w-full border border-gray-300 p-2 rounded-lg">
                                                 <option value="">Selecione...</option>
                                                 {gruposConfig.map(g => <option key={g.nome} value={g.nome}>{g.nome}</option>)}
                                             </select>
                                         </div>
-                                        <button
-                                            onClick={buscarCSV}
-                                            disabled={!grupoSelecionado || processandoImportacao}
-                                            className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 font-bold flex items-center gap-2"
-                                        >
+                                        <button onClick={buscarCSV} disabled={!grupoSelecionado || processandoImportacao} className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 font-bold flex items-center gap-2">
                                             {processandoImportacao ? "Buscando..." : <><CloudDownload size={20} /> Verificar Planilha</>}
                                         </button>
                                     </div>
                                 )}
                             </div>
-
-                            {/* TABELA DE REVISÃO */}
                             {dadosImportacao.length > 0 && (
                                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                                     <div className="bg-orange-50 p-4 border-b border-orange-100 flex justify-between items-center flex-wrap gap-2">
                                         <div className="flex items-center gap-2 text-orange-800 text-sm font-medium">
-                                            <AlertTriangle size={18} />
-                                            Confira os dados abaixo antes de importar. (Mês: {mesReferencia})
+                                            <AlertTriangle size={18} /> Confira os dados abaixo antes de importar. (Mês: {mesReferencia})
                                         </div>
-                                        <button
-                                            onClick={salvarImportacao}
-                                            disabled={processandoImportacao}
-                                            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 shadow-sm"
-                                        >
+                                        <button onClick={salvarImportacao} disabled={processandoImportacao} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 shadow-sm">
                                             <Save size={18} /> Confirmar Importação
                                         </button>
                                     </div>
-
                                     <div className="overflow-x-auto">
                                         <table className="w-full text-sm text-left">
                                             <thead className="bg-gray-50 text-gray-600 font-bold uppercase text-[10px] tracking-wider border-b">
@@ -525,66 +612,28 @@ export default function VisaoGeralRelatorios() {
                                             <tbody className="divide-y divide-gray-100">
                                                 {dadosImportacao.map((row, idx) => (
                                                     <tr key={idx} className={`hover:bg-gray-50 transition ${row.status === 'erro_nome' ? 'bg-red-50' : ''}`}>
-
-                                                        {/* 1. NOME NA PLANILHA (Apenas Leitura) */}
                                                         <td className="px-6 py-3 font-mono text-gray-500 text-xs">
                                                             {row.nomeCSV}
                                                             <div className="text-[10px] text-gray-400">{row.tipoCSV}</div>
                                                         </td>
-
-                                                        {/* 2. MATCH DO SISTEMA (EDITÁVEL - DROPDOWN) */}
                                                         <td className="px-6 py-3">
-                                                            <select
-                                                                value={row.matchId || ""}
-                                                                onChange={(e) => atualizarItemImportacao(idx, 'matchId', e.target.value)}
-                                                                className={`w-full text-sm border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 p-1.5 ${!row.matchId ? 'border-red-300 bg-red-50 text-red-700 font-bold' : 'border-gray-300'}`}
-                                                            >
+                                                            <select value={row.matchId || ""} onChange={(e) => atualizarItemImportacao(idx, 'matchId', e.target.value)} className={`w-full text-sm border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 p-1.5 ${!row.matchId ? 'border-red-300 bg-red-50 text-red-700 font-bold' : 'border-gray-300'}`}>
                                                                 <option value="">-- Selecione ou Ignore --</option>
                                                                 {listaPublicadores.map(pub => (
-                                                                    <option key={pub.id} value={pub.id}>
-                                                                        {pub.dados_pessoais.nome_completo}
-                                                                    </option>
+                                                                    <option key={pub.id} value={pub.id}>{pub.dados_pessoais.nome_completo}</option>
                                                                 ))}
                                                             </select>
                                                         </td>
-
-                                                        {/* 3. HORAS (EDITÁVEL) */}
                                                         <td className="px-6 py-3 text-center">
-                                                            <input
-                                                                type="number"
-                                                                value={row.horas}
-                                                                onChange={(e) => atualizarItemImportacao(idx, 'horas', Number(e.target.value))}
-                                                                className="w-16 text-center border border-gray-300 rounded-md p-1 text-sm focus:ring-blue-500 focus:border-blue-500"
-                                                            />
+                                                            <input type="number" value={row.horas} onChange={(e) => atualizarItemImportacao(idx, 'horas', Number(e.target.value))} className="w-16 text-center border border-gray-300 rounded-md p-1 text-sm focus:ring-blue-500 focus:border-blue-500" />
                                                         </td>
-
-                                                        {/* 4. ESTUDOS (EDITÁVEL) */}
                                                         <td className="px-6 py-3 text-center">
-                                                            <input
-                                                                type="number"
-                                                                value={row.estudos}
-                                                                onChange={(e) => atualizarItemImportacao(idx, 'estudos', Number(e.target.value))}
-                                                                className="w-14 text-center border border-gray-300 rounded-md p-1 text-sm focus:ring-blue-500 focus:border-blue-500"
-                                                            />
+                                                            <input type="number" value={row.estudos} onChange={(e) => atualizarItemImportacao(idx, 'estudos', Number(e.target.value))} className="w-14 text-center border border-gray-300 rounded-md p-1 text-sm focus:ring-blue-500 focus:border-blue-500" />
                                                         </td>
-
-                                                        {/* 5. OBSERVAÇÕES (EDITÁVEL) */}
                                                         <td className="px-6 py-3">
-                                                            <input
-                                                                type="text"
-                                                                value={row.observacoes}
-                                                                onChange={(e) => atualizarItemImportacao(idx, 'observacoes', e.target.value)}
-                                                                className="w-full min-w-[150px] border border-gray-300 rounded-md p-1 text-xs focus:ring-blue-500 focus:border-blue-500"
-                                                            />
-                                                            {/* Mostra o Bônus detectado se houver */}
-                                                            {row.horasBonus > 0 && (
-                                                                <div className="text-[10px] text-green-600 font-bold mt-1">
-                                                                    + {row.horasBonus}h Bônus detectado
-                                                                </div>
-                                                            )}
+                                                            <input type="text" value={row.observacoes} onChange={(e) => atualizarItemImportacao(idx, 'observacoes', e.target.value)} className="w-full min-w-[150px] border border-gray-300 rounded-md p-1 text-xs focus:ring-blue-500 focus:border-blue-500" />
+                                                            {row.horasBonus > 0 && <div className="text-[10px] text-green-600 font-bold mt-1">+ {row.horasBonus}h Bônus detectado</div>}
                                                         </td>
-
-                                                        {/* 6. STATUS (AUTOMÁTICO) */}
                                                         <td className="px-6 py-3 text-center">
                                                             {row.status === 'novo' && <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded font-bold">Novo</span>}
                                                             {row.status === 'atualizar' && <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded font-bold">Atualizar</span>}
