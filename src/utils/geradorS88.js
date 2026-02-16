@@ -1,112 +1,174 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { db } from '../config/firebase';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
 
 /**
- * Gera o PDF no modelo S-88 (Registro de Assistência)
- * @param {number} anoServico - O ano de início (ex: 2024 para o ano 2024/2025)
- * @param {string} nomeCongregacao - Nome da congregação para o cabeçalho
+ * Gera o PDF do S-88 (Registro de Assistência)
+ * Layout fiel ao formulário oficial com colunas de Quantidade, Total e Média.
+ * * @param {number} anoServico - O ano final do serviço (ex: 2024 para o ano de 2023/2024)
+ * @param {string} nomeCongregacao - Nome para o cabeçalho
  */
 export const gerarPDF_S88 = async (anoServico, nomeCongregacao) => {
-    const doc = new jsPDF('p', 'mm', 'a4');
+    const docPdf = new jsPDF('l', 'mm', 'a4'); // Paisagem (Landscape)
 
-    // Configuração de Meses seguindo o Ano de Serviço (Setembro a Agosto)
-    const estruturaAno = [
-        { label: 'Setembro', chave: `${anoServico}-09` },
-        { label: 'Outubro', chave: `${anoServico}-10` },
-        { label: 'Novembro', chave: `${anoServico}-11` },
-        { label: 'Dezembro', chave: `${anoServico}-12` },
-        { label: 'Janeiro', chave: `${anoServico + 1}-01` },
-        { label: 'Fevereiro', chave: `${anoServico + 1}-02` },
-        { label: 'Março', chave: `${anoServico + 1}-03` },
-        { label: 'Abril', chave: `${anoServico + 1}-04` },
-        { label: 'Maio', chave: `${anoServico + 1}-05` },
-        { label: 'Junho', chave: `${anoServico + 1}-06` },
-        { label: 'Julho', chave: `${anoServico + 1}-07` },
-        { label: 'Agosto', chave: `${anoServico + 1}-08` },
+    // --- 1. CONFIGURAÇÃO DE ESTILOS ---
+    const azulTeocratico = [75, 110, 155]; // Um azul sóbrio
+    const cinzaClaro = [245, 245, 245];
+
+    // --- 2. CABEÇALHO DO DOCUMENTO ---
+    docPdf.setFontSize(14);
+    docPdf.setFont('helvetica', 'bold');
+    docPdf.text('REGISTRO DA ASSISTÊNCIA ÀS REUNIÕES CONGREGACIONAIS (S-88)', 14, 15);
+
+    docPdf.setFontSize(10);
+    docPdf.setFont('helvetica', 'normal');
+    docPdf.text(`Congregação: ${nomeCongregacao}`, 14, 22);
+    docPdf.text(`Ano de Serviço: ${anoServico - 1} / ${anoServico}`, 200, 22);
+
+    // --- 3. PREPARAÇÃO DOS DADOS (Busca no Firestore) ---
+    // O ano de serviço vai de Setembro (ano anterior) até Agosto (ano atual)
+    const meses = [
+        { nome: 'Setembro', mes: '09', ano: anoServico - 1 },
+        { nome: 'Outubro', mes: '10', ano: anoServico - 1 },
+        { nome: 'Novembro', mes: '11', ano: anoServico - 1 },
+        { nome: 'Dezembro', mes: '12', ano: anoServico - 1 },
+        { nome: 'Janeiro', mes: '01', ano: anoServico },
+        { nome: 'Fevereiro', mes: '02', ano: anoServico },
+        { nome: 'Março', mes: '03', ano: anoServico },
+        { nome: 'Abril', mes: '04', ano: anoServico },
+        { nome: 'Maio', mes: '05', ano: anoServico },
+        { nome: 'Junho', mes: '06', ano: anoServico },
+        { nome: 'Julho', mes: '07', ano: anoServico },
+        { nome: 'Agosto', mes: '08', ano: anoServico },
     ];
 
-    try {
-        // 1. Busca os dados consolidados pela Cloud Function
-        const estatisticasRef = collection(db, "estatisticas_assistencia");
-        const q = query(
-            estatisticasRef,
-            where("ano_servico", "==", anoServico)
-        );
+    const linhasTabela = [];
+    let mediaAnualMeioSoma = 0;
+    let mediaAnualFimSoma = 0;
+    let mesesContadosMeio = 0;
+    let mesesContadosFim = 0;
 
-        const querySnapshot = await getDocs(q);
-        const dadosMap = {};
-        querySnapshot.forEach(doc => {
-            dadosMap[doc.id] = doc.data();
-        });
+    // Busca os dados mês a mês
+    for (const m of meses) {
+        const idDoc = `${m.ano}-${m.mes}`;
+        const ref = doc(db, 'estatisticas_assistencia', idDoc);
 
-        // 2. Cabeçalho do Formulário S-88
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(12);
-        doc.text("REGISTRO DA ASSISTÊNCIA ÀS REUNIÕES CONGREGACIONAIS", 105, 15, { align: "center" });
+        let dados = {
+            qtd_meio: '', total_meio: '', media_meio: '',
+            qtd_fim: '', total_fim: '', media_fim: ''
+        };
 
-        doc.setFontSize(10);
-        doc.text(`Congregação: ${nomeCongregacao.toUpperCase()}`, 15, 25);
-        doc.text(`Ano de Serviço: ${anoServico}/${anoServico + 1}`, 160, 25);
+        try {
+            const snap = await getDoc(ref);
+            if (snap.exists()) {
+                const d = snap.data();
 
-        // 3. Tabela: Reunião do Meio de Semana
-        doc.setFontSize(11);
-        doc.text("Reunião do meio de semana", 15, 35);
+                // Mapeia os dados do banco para a tabela
+                dados.qtd_meio = d.qtd_reunioes_meio || 0;
+                dados.total_meio = d.total_assistencia_meio || '-'; // <--- CAMPO NOVO
+                dados.media_meio = d.media_meio || 0;
 
-        const corpoMeio = estruturaAno.map(mes => [
-            mes.label,
-            dadosMap[mes.chave]?.total_reunioes_meio || "",
-            dadosMap[mes.chave]?.media_meio || ""
+                dados.qtd_fim = d.qtd_reunioes_fim || 0;
+                dados.total_fim = d.total_assistencia_fim || '-';   // <--- CAMPO NOVO
+                dados.media_fim = d.media_fim || 0;
+
+                // Cálculos para a linha final de média anual
+                if (d.media_meio > 0) {
+                    mediaAnualMeioSoma += d.media_meio;
+                    mesesContadosMeio++;
+                }
+                if (d.media_fim > 0) {
+                    mediaAnualFimSoma += d.media_fim;
+                    mesesContadosFim++;
+                }
+            }
+        } catch (error) {
+            console.error(`Erro ao buscar dados de ${idDoc}`, error);
+        }
+
+        linhasTabela.push([
+            m.nome,
+            dados.qtd_meio || '-',
+            dados.total_meio,
+            dados.media_meio || '-',
+            // Espaçador visual (opcional, ajustado via layout)
+            dados.qtd_fim || '-',
+            dados.total_fim,
+            dados.media_fim || '-'
         ]);
-
-        autoTable(doc, {
-            startY: 38,
-            head: [['Mês', 'Quantidade de reuniões', 'Assistência média por semana']],
-            body: corpoMeio,
-            theme: 'grid',
-            headStyles: { fillColor: [249, 115, 22], halign: 'center' }, // Cor Laranja (Meio de Semana)
-            columnStyles: {
-                1: { halign: 'center' },
-                2: { halign: 'center', fontStyle: 'bold' }
-            },
-        });
-
-        // 4. Tabela: Reunião do Fim de Semana
-        const finalYMeio = doc.lastAutoTable.finalY;
-        doc.text("Reunião do fim de semana", 15, finalYMeio + 10);
-
-        const corpoFim = estruturaAno.map(mes => [
-            mes.label,
-            dadosMap[mes.chave]?.total_reunioes_fim || "",
-            dadosMap[mes.chave]?.media_fim || ""
-        ]);
-
-        autoTable(doc, {
-            startY: finalYMeio + 13,
-            head: [['Mês', 'Quantidade de reuniões', 'Assistência média por semana']],
-            body: corpoFim,
-            theme: 'grid',
-            headStyles: { fillColor: [37, 99, 235], halign: 'center' }, // Cor Azul (Fim de Semana)
-            columnStyles: {
-                1: { halign: 'center' },
-                2: { halign: 'center', fontStyle: 'bold' }
-            },
-        });
-
-        // 5. Rodapé Técnico
-        const paginaFinalY = doc.internal.pageSize.height;
-        doc.setFont("helvetica", "italic");
-        doc.setFontSize(8);
-        doc.setTextColor(150);
-        doc.text("S-88-T 12/18", 15, paginaFinalY - 10);
-        doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 195, paginaFinalY - 10, { align: 'right' });
-
-        // Salva o arquivo
-        doc.save(`S-88_${anoServico}-${anoServico + 1}.pdf`);
-
-    } catch (error) {
-        console.error("Erro ao gerar S-88:", error);
-        throw new Error("Falha ao processar dados de assistência.");
     }
+
+    // Linha de Totais/Médias Finais
+    const mediaFinalMeio = mesesContadosMeio > 0 ? Math.round(mediaAnualMeioSoma / mesesContadosMeio) : 0;
+    const mediaFinalFim = mesesContadosFim > 0 ? Math.round(mediaAnualFimSoma / mesesContadosFim) : 0;
+
+    linhasTabela.push([
+        { content: 'MÉDIAS DO ANO', styles: { fontStyle: 'bold', fillColor: cinzaClaro } },
+        { content: '-', styles: { fillColor: cinzaClaro } },
+        { content: '-', styles: { fillColor: cinzaClaro } },
+        { content: String(mediaFinalMeio), styles: { fontStyle: 'bold', fillColor: cinzaClaro, textColor: azulTeocratico } },
+        { content: '-', styles: { fillColor: cinzaClaro } },
+        { content: '-', styles: { fillColor: cinzaClaro } },
+        { content: String(mediaFinalFim), styles: { fontStyle: 'bold', fillColor: cinzaClaro, textColor: azulTeocratico } },
+    ]);
+
+    // --- 4. GERAÇÃO DA TABELA (AutoTable) ---
+    autoTable(docPdf, {
+        startY: 30,
+        head: [
+            [
+                { content: '', colSpan: 1, styles: { fillColor: [255, 255, 255] } }, // Espaço para o nome do mês
+                { content: 'REUNIÃO DO MEIO DE SEMANA', colSpan: 3, styles: { halign: 'center', fillColor: azulTeocratico, textColor: 255, fontStyle: 'bold' } },
+                { content: 'REUNIÃO DO FIM DE SEMANA', colSpan: 3, styles: { halign: 'center', fillColor: [60, 90, 130], textColor: 255, fontStyle: 'bold' } }
+            ],
+            [
+                'Mês',
+                'Qtde Reuniões', 'Assist. Total', 'Média',
+                'Qtde Reuniões', 'Assist. Total', 'Média'
+            ]
+        ],
+        body: linhasTabela,
+        theme: 'grid',
+        styles: {
+            fontSize: 9,
+            cellPadding: 2, // Reduzi um pouco o padding interno
+            valign: 'middle',
+            halign: 'center',
+            lineWidth: 0.1,
+            lineColor: [200, 200, 200]
+        },
+        columnStyles: {
+            0: { halign: 'left', fontStyle: 'bold', cellWidth: 45 }, // Aumentei um pouco pro nome do mês caber folgado
+            1: { cellWidth: 22 }, // Reduzi de 30 para 22 (Qtd Meio)
+            2: { cellWidth: 25 }, // Reduzi de 30 para 25 (Total Meio)
+            3: { cellWidth: 25, fontStyle: 'bold' }, // Média Meio
+
+            // Espaçador visual natural
+
+            4: { cellWidth: 22 }, // Reduzi de 30 para 22 (Qtd Fim)
+            5: { cellWidth: 25 }, // Reduzi de 30 para 25 (Total Fim)
+            6: { cellWidth: 25, fontStyle: 'bold' }  // Média Fim
+        },
+        headStyles: {
+            fillColor: [240, 240, 240],
+            textColor: [50, 50, 50],
+            fontStyle: 'bold',
+            lineWidth: 0.1
+        },
+    });
+
+    // Rodapé
+    const pageCount = docPdf.internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+        docPdf.setPage(i);
+        docPdf.setFontSize(8);
+        docPdf.setTextColor(150);
+        docPdf.text('Gerado pelo Gestor S-21', 14, docPdf.internal.pageSize.height - 10);
+        docPdf.text(`Página ${i} de ${pageCount}`, docPdf.internal.pageSize.width - 30, docPdf.internal.pageSize.height - 10);
+    }
+
+    // Salva o arquivo
+    const nomeArquivo = `S-88_${anoServico - 1}-${anoServico}.pdf`;
+    docPdf.save(nomeArquivo);
 };

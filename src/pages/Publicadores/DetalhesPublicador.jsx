@@ -11,8 +11,12 @@ import toast from 'react-hot-toast';
 import ModalLancamento from '../../components/Relatorios/ModalLancamento';
 import { calcularFaixaEtaria } from '../../utils/helpers';
 import { gerarPDFIndividual } from '../../utils/geradorPDF';
+import { useAuth } from '../../contexts/AuthContext'; // <--- IMPORTADO
 
 export default function DetalhesPublicador() {
+    // --- SEGURANÇA ---
+    const { isAdmin } = useAuth(); // Verifica se é Admin
+
     const { id } = useParams();
     const navigate = useNavigate();
     const [publicador, setPublicador] = useState(null);
@@ -76,17 +80,14 @@ export default function DetalhesPublicador() {
         }
     };
 
-    // --- CORREÇÃO: IMPRIMIR PDF DIRETO (SEM ZIP) ---
     const handleImprimirIndividual = () => {
         setImprimindo(true);
         try {
-            // Chama a função que gera o PDF direto no navegador
             gerarPDFIndividual(
                 publicador,
                 relatoriosPorAno,
                 anosParaExibir
             );
-
             toast.success("PDF baixado com sucesso!");
         } catch (error) {
             console.error("Erro ao imprimir:", error);
@@ -163,7 +164,8 @@ export default function DetalhesPublicador() {
     const statusColor = {
         "Ativo": "bg-green-100 text-green-700",
         "Inativo": "bg-orange-100 text-orange-700",
-        "Removido": "bg-red-100 text-red-700 border-red-200 border"
+        "Removido": "bg-red-100 text-red-700 border-red-200 border",
+        "Excluído": "bg-gray-200 text-gray-700 border-gray-300 border"
     }[publicador.dados_eclesiasticos.situacao] || "bg-gray-100 text-gray-700";
 
     return (
@@ -177,7 +179,7 @@ export default function DetalhesPublicador() {
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 md:p-6 mb-6">
                 <div className="flex flex-col md:flex-row justify-between md:items-start gap-4">
                     <div className="flex flex-row items-center md:items-start gap-4">
-                        <div className={`w-14 h-14 md:w-16 md:h-16 rounded-full flex items-center justify-center text-xl md:text-2xl text-white font-bold shrink-0
+                        <div className={`w-14 h-14 md:w-16 md:h-16 rounded-full flex items-center justify-center text-xl md:text-2xl text-white font-bold shrink-0 
                             ${publicador.dados_pessoais.genero === 'Masculino' ? 'bg-teocratico-blue' : 'bg-pink-400'}`}>
                             {publicador.dados_pessoais.nome_completo.charAt(0)}
                         </div>
@@ -189,14 +191,18 @@ export default function DetalhesPublicador() {
                                 </h1>
 
                                 <div className="flex gap-1">
-                                    <button
-                                        onClick={handleEditarPublicador}
-                                        className="p-1.5 text-gray-500 hover:text-blue-600 bg-gray-100 hover:bg-blue-50 rounded-lg transition"
-                                        title="Editar Dados"
-                                    >
-                                        <Pencil size={18} />
-                                    </button>
+                                    {/* BOTÃO EDITAR - APENAS ADMIN */}
+                                    {isAdmin && (
+                                        <button
+                                            onClick={handleEditarPublicador}
+                                            className="p-1.5 text-gray-500 hover:text-blue-600 bg-gray-100 hover:bg-blue-50 rounded-lg transition"
+                                            title="Editar Dados"
+                                        >
+                                            <Pencil size={18} />
+                                        </button>
+                                    )}
 
+                                    {/* BOTÃO IMPRIMIR - VISÍVEL PARA TODOS (APENAS LEITURA) */}
                                     <button
                                         onClick={handleImprimirIndividual}
                                         disabled={imprimindo}
@@ -255,12 +261,15 @@ export default function DetalhesPublicador() {
                         </div>
                     </div>
 
-                    <button
-                        onClick={() => abrirModalLancamento(null)}
-                        className="w-full md:w-auto bg-teocratico-blue text-white px-4 py-3 md:py-2 rounded-lg flex items-center justify-center gap-2 hover:bg-blue-700 transition shadow-sm text-sm font-medium"
-                    >
-                        <PlusCircle size={18} /> Lançar Relatório
-                    </button>
+                    {/* BOTÃO LANÇAR RELATÓRIO - APENAS ADMIN */}
+                    {isAdmin && (
+                        <button
+                            onClick={() => abrirModalLancamento(null)}
+                            className="w-full md:w-auto bg-teocratico-blue text-white px-4 py-3 md:py-2 rounded-lg flex items-center justify-center gap-2 hover:bg-blue-700 transition shadow-sm text-sm font-medium"
+                        >
+                            <PlusCircle size={18} /> Lançar Relatório
+                        </button>
+                    )}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-y-4 gap-x-8 mt-6 pt-4 border-t border-gray-100 text-sm">
@@ -273,23 +282,20 @@ export default function DetalhesPublicador() {
                             <Droplets size={16} className="text-blue-400 shrink-0" />
                             <span>Batismo: <strong>{publicador.dados_eclesiasticos.data_batismo ? new Date(publicador.dados_eclesiasticos.data_batismo + 'T12:00:00').toLocaleDateString('pt-BR') : (publicador.dados_eclesiasticos.batizado ? 'Sim (s/data)' : 'Não')}</strong></span>
                         </div>
-                        {/* --- CÓDIGO ALTERADO: DATA DINÂMICA (PIONEIRO OU CONGREGAÇÃO) --- */}
+
                         <div className="flex items-center gap-2 text-gray-600">
                             <Calendar size={16} className="text-green-500 shrink-0" />
                             <span>
-                                {/* Se for Pioneiro Regular, muda o rótulo e busca outra data */}
                                 {publicador.dados_eclesiasticos.pioneiro_tipo === 'Pioneiro Regular'
                                     ? "Início Pioneiro: "
                                     : "Início na Cong.: "
                                 }
                                 <strong>
                                     {(() => {
-                                        // Decide qual data usar
                                         const dataParaMostrar = publicador.dados_eclesiasticos.pioneiro_tipo === 'Pioneiro Regular'
                                             ? publicador.dados_eclesiasticos.data_designacao_pioneiro
                                             : publicador.dados_eclesiasticos.data_inicio;
 
-                                        // Formata ou mostra traço
                                         return dataParaMostrar
                                             ? new Date(dataParaMostrar + 'T12:00:00').toLocaleDateString('pt-BR')
                                             : <span className="text-gray-400 font-normal italic">--</span>;
@@ -384,7 +390,8 @@ export default function DetalhesPublicador() {
                                                         <td className="px-4 py-4 text-center font-bold text-gray-800">{rel ? (<div className="flex items-center justify-center gap-1"><span>{Math.floor(rel.atividade.horas || 0)}</span>{(rel.atividade.bonus_horas || 0) > 0 && (<span className="text-yellow-600 text-xs bg-yellow-100 px-1 rounded" title="Bônus">+ {Math.floor(rel.atividade.bonus_horas)}</span>)}</div>) : '-'}</td>
                                                         <td className="px-6 py-4 text-gray-500 text-xs max-w-[150px] truncate" title={rel?.atividade.observacoes}>{rel?.atividade.observacoes || ''}</td>
                                                         <td className="px-4 py-4 text-center">
-                                                            {rel && (
+                                                            {/* BOTÃO EDITAR RELATÓRIO - APENAS ADMIN */}
+                                                            {isAdmin && rel && (
                                                                 <button
                                                                     onClick={() => abrirModalLancamento(rel)}
                                                                     className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition"

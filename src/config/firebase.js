@@ -1,7 +1,8 @@
 // src/config/firebase.js
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
+// ADICIONADO: Importar GoogleAuthProvider
+import { getAuth, GoogleAuthProvider } from "firebase/auth";
 
 // Configuração lendo as variáveis de ambiente (Vite)
 const firebaseConfig = {
@@ -21,5 +22,9 @@ const db = getFirestore(app);
 
 // Inicializa a Autenticação
 const auth = getAuth(app);
-// Exporta tudo
-export { db, auth };
+
+// ADICIONADO: Inicializa o Provedor do Google
+const googleProvider = new GoogleAuthProvider();
+
+// ADICIONADO: Exporta o googleProvider junto com db e auth
+export { db, auth, googleProvider };

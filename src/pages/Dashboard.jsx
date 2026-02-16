@@ -1,71 +1,66 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../config/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
-import { Users, FileText, TrendingUp, AlertCircle, Calendar, BarChart3, Users2, Smile, ArrowRight, BookOpen } from 'lucide-react';
+import {
+    Users, FileText, TrendingUp, AlertCircle, Calendar, BarChart3,
+    Users2, Smile, ArrowRight, BookOpen, UserX
+} from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
+import {
+    PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend,
+    BarChart, Bar, XAxis, YAxis, CartesianGrid, AreaChart, Area
+} from 'recharts';
+import { useAuth } from '../contexts/AuthContext';
+import BarraSincronizacao from '../components/BarraSincronizacao';
 
-// Cores
-const COLORS_SITUACAO = ['#10B981', '#F59E0B', '#EF4444', '#9CA3AF'];
-const COLORS_FAIXA = ['#38BDF8', '#818CF8', '#6366F1', '#4F46E5'];
-// Cores para os Estudos (Pub, Aux, Reg)
-const COLORS_ESTUDOS = {
-    pub: '#9CA3AF', // Cinza para Publicadores
-    aux: '#F59E0B', // Laranja para Auxiliares
-    reg: '#10B981'  // Verde para Regulares
+// --- CORES DO SISTEMA ---
+const COLORS_SITUACAO = {
+    'Ativos': '#10B981',      // Verde
+    'Irregulares': '#F59E0B', // Laranja
+    'Inativos': '#EF4444',    // Vermelho
+    'Removidos': '#374151'    // Cinza Escuro
 };
 
-// --- COMPONENTE DE LABEL DEFINITIVO ---
-// Agora recebe "data" e "index" para buscar o valor exato, sem erros de soma
+const COLORS_FAIXA = ['#38BDF8', '#818CF8', '#6366F1', '#4F46E5'];
+const COLORS_ESTUDOS = { pub: '#9CA3AF', aux: '#F59E0B', reg: '#10B981' };
+
+// Componente para Labels Personalizadas nos Gráficos
 const CustomBarLabel = (props) => {
     const { x, y, width, height, index, pKey, data } = props;
-    
-    // 1. Se a barra tiver altura zero, não mostra nada (evita sobreposição)
     if (!height || height === 0) return null;
-
-    // 2. Busca o valor exato no array de dados original usando o índice do mês
-    // Isso garante que mostre "17" e não "63" (o acumulado)
     let valorReal = 0;
-    if (data && data[index] && pKey) {
-        valorReal = data[index][pKey];
-    }
-
-    // 3. Se valor for 0, não mostra
+    if (data && data[index] && pKey) valorReal = data[index][pKey];
     if (!valorReal || valorReal === 0) return null;
-
     return (
-        <text 
-            x={x + width / 2} 
-            y={y + height / 2 + 1} 
-            fill="#fff" 
-            textAnchor="middle" 
-            dominantBaseline="middle" 
-            fontSize={10} 
-            fontWeight="bold"
-            style={{ textShadow: '0px 1px 2px rgba(0,0,0,0.8)', pointerEvents: 'none' }}
-        >
+        <text x={x + width / 2} y={y + height / 2 + 1} fill="#fff" textAnchor="middle" dominantBaseline="middle" fontSize={10} fontWeight="bold" style={{ textShadow: '0px 1px 2px rgba(0,0,0,0.8)', pointerEvents: 'none' }}>
             {valorReal}
         </text>
     );
 };
 
 export default function Dashboard() {
+    const { isAdmin } = useAuth();
+
+    // Estados para armazenar estatísticas
     const [stats, setStats] = useState({
         totalGeral: 0, totalAtivosInativos: 0, ativos: 0, irregulares: 0,
-        inativos: 0, removidos: 0, pioneirosRegulares: 0, anciaos: 0,
+        inativos: 0, removidos: 0, excluidos: 0, pioneirosRegulares: 0, anciaos: 0,
         servos: 0, varoes: 0, naoBatizados: 0
     });
-    
+
+    // Estados para gráficos
     const [dadosGrupos, setDadosGrupos] = useState([]);
     const [dadosFaixaEtaria, setDadosFaixaEtaria] = useState([]);
-    const [dadosEstudos, setDadosEstudos] = useState([]); 
-    
+    const [dadosEstudos, setDadosEstudos] = useState([]);
+    const [dadosAssistencia, setDadosAssistencia] = useState([]);
+
+    // Estados de totais
     const [relatoriosColetados, setRelatoriosColetados] = useState(0);
     const [totalEsperadoRelatorios, setTotalEsperadoRelatorios] = useState(0);
     const [nomeMesRelatorio, setNomeMesRelatorio] = useState("");
-    const [mediaAssistencia, setMediaAssistencia] = useState({ meio: 0, fim: 0 });
+    const [mediaAssistenciaMes, setMediaAssistenciaMes] = useState({ meio: 0, fim: 0 });
+
     const [loading, setLoading] = useState(true);
-    
     const [isMounted, setIsMounted] = useState(false);
 
     useEffect(() => {
@@ -76,79 +71,151 @@ export default function Dashboard() {
     const carregarTudo = async () => {
         try {
             const hoje = new Date();
-            
-            // --- 1. DATAS ---
-            const dataMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
-            const anoStr = dataMesAnterior.getFullYear();
-            const mesStr = String(dataMesAnterior.getMonth() + 1).padStart(2, '0');
-            const mesRelatorioIso = `${anoStr}-${mesStr}`; 
-            
-            setNomeMesRelatorio(dataMesAnterior.toLocaleDateString('pt-BR', { month: 'long' }));
-            const mesAtualIso = hoje.toISOString().slice(0, 7);
 
-            // --- 2. PUBLICADORES ---
+            // 1. DEFINIR DATA DE REFERÊNCIA (MÊS ANTERIOR AO ATUAL)
+            // Ex: Se hoje é 15/02/2026, a referência é Janeiro/2026
+            const dataMesReferencia = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+            const anoRef = dataMesReferencia.getFullYear();
+            const mesRef = dataMesReferencia.getMonth() + 1;
+
+            const mesRelatorioIso = `${anoRef}-${String(mesRef).padStart(2, '0')}`; // Formato YYYY-MM
+            setNomeMesRelatorio(dataMesReferencia.toLocaleDateString('pt-BR', { month: 'long' }));
+
+            // 2. BUSCAR RELATÓRIOS DO MÊS DE REFERÊNCIA PRIMEIRO
+            // Isso é crucial para identificar quem estava ativo NAQUELA ÉPOCA
+            const qRels = query(collection(db, "relatorios"), where("mes_referencia", "==", mesRelatorioIso));
+            const snapRels = await getDocs(qRels);
+
+            const mapaRelatoriosMes = {}; // ID -> Dados do Relatório
+            const idsQueRelataram = new Set(); // Apenas IDs únicos
+
+            snapRels.forEach(doc => {
+                const d = doc.data();
+                mapaRelatoriosMes[d.id_publicador] = d;
+                idsQueRelataram.add(d.id_publicador);
+            });
+
+            // O número de relatórios coletados é a quantidade de pessoas únicas que entregaram
+            setRelatoriosColetados(idsQueRelataram.size);
+
+            // 3. BUSCAR E PROCESSAR PUBLICADORES
             const qPubs = query(collection(db, "publicadores"));
             const snapPubs = await getDocs(qPubs);
 
             const novosStats = {
                 totalGeral: 0, totalAtivosInativos: 0, ativos: 0, irregulares: 0,
-                inativos: 0, removidos: 0, pioneirosRegulares: 0, anciaos: 0,
+                inativos: 0, removidos: 0, excluidos: 0, pioneirosRegulares: 0, anciaos: 0,
                 servos: 0, varoes: 0, naoBatizados: 0
             };
 
             const contagemGrupos = {};
             const contagemFaixa = { 'Crianças': 0, 'Jovens': 0, 'Adultos': 0, 'Idosos': 0 };
-            
-            // Lista de IDs válidos para filtrar relatórios "fantasmas"
-            const idsPublicadoresValidos = new Set();
+
+            // IDs válidos para o gráfico de estudos (histórico)
+            const idsConsideradosValidos = new Set();
+
+            // Data limite para considerar um cadastro válido (fim do mês de referência)
+            const dataFimMesReferencia = new Date(anoRef, mesRef, 0, 23, 59, 59);
+
+            // Função auxiliar para tratar datas DD/MM/YYYY ou YYYY-MM-DD
+            const parseData = (dataStr) => {
+                if (!dataStr) return null;
+                if (dataStr.includes('/')) {
+                    const partes = dataStr.split('/');
+                    if (partes.length === 3) return new Date(`${partes[2]}-${partes[1]}-${partes[0]}T12:00:00`);
+                }
+                if (dataStr.includes('-')) return new Date(dataStr + "T12:00:00");
+                return new Date(dataStr);
+            };
 
             snapPubs.forEach((doc) => {
                 const data = doc.data();
-                const id = doc.id; 
-                const ec = data.dados_eclesiasticos || {};
-                const pess = data.dados_pessoais || {};
-                const sit = ec.situacao || "Ativo";
+                const id = doc.id;
+                let sit = data.dados_eclesiasticos?.situacao || "Ativo";
 
-                idsPublicadoresValidos.add(id);
+                // --- LÓGICA DA "MÁQUINA DO TEMPO" ---
+                const entregouRelatorio = idsQueRelataram.has(id);
 
-                novosStats.totalGeral++;
+                // Se a pessoa entregou relatório em Janeiro, ela conta como ATIVA para Janeiro,
+                // mesmo que hoje (Fevereiro) ela esteja como "Excluída", "Removida" ou "Inativa".
+                if (entregouRelatorio) {
+                    if (['Excluído', 'Removido', 'Inativo'].includes(sit)) {
+                        sit = 'Ativo';
+                    }
+                }
 
-                if (sit === 'Removido') {
+                const dataInicioStr = data.dados_eclesiasticos?.data_inicio || data.dados_eclesiasticos?.data_batismo;
+
+                // --- FILTRO DE DATA FUTURA ---
+                // Se a pessoa NÃO entregou relatório, precisamos ver se ela já existia.
+                // Se a data de início for maior que o fim de Janeiro, ignoramos.
+                if (!entregouRelatorio && dataInicioStr) {
+                    const dataInicio = parseData(dataInicioStr);
+                    if (dataInicio && !isNaN(dataInicio.getTime())) {
+                        if (dataInicio > dataFimMesReferencia) return; // Pula este registro (futuro)
+                    }
+                }
+
+                // Se passou pelos filtros, é um publicador válido para a estatística
+                idsConsideradosValidos.add(id);
+
+                // --- CONTABILIZAÇÃO ---
+                if (sit === 'Excluído') {
+                    novosStats.excluidos++;
+                } else if (sit === 'Removido') {
                     novosStats.removidos++;
                 } else {
+                    // Contagem principal (Ativos + Irregulares + Inativos)
                     novosStats.totalAtivosInativos++;
+
                     if (sit === 'Ativo') novosStats.ativos++;
                     else if (sit === 'Irregular') novosStats.irregulares++;
                     else if (sit === 'Inativo') novosStats.inativos++;
 
-                    const privs = ec.privilegios || [];
+                    // --- DETALHES (Apenas para quem compõe o corpo atual) ---
+                    const privs = data.dados_eclesiasticos?.privilegios || [];
                     if (privs.includes('Ancião')) novosStats.anciaos++;
                     if (privs.includes('Servo Ministerial')) novosStats.servos++;
                     if (privs.includes('Varão Habilitado')) novosStats.varoes++;
-                    if (ec.pioneiro_tipo === 'Pioneiro Regular') novosStats.pioneirosRegulares++;
 
-                    const isBatizado = ec.batizado === true || (ec.data_batismo && ec.data_batismo.length > 5);
-                    if (!isBatizado) novosStats.naoBatizados++;
+                    // Recupera tipo de pioneiro do relatório (para pegar histórico correto) ou usa o atual
+                    let tipoPioneiro = data.dados_eclesiasticos?.pioneiro_tipo;
+                    if (entregouRelatorio && mapaRelatoriosMes[id]?.atividade?.tipo_pioneiro_mes) {
+                        tipoPioneiro = mapaRelatoriosMes[id].atividade.tipo_pioneiro_mes;
+                    }
 
-                    const grupo = ec.grupo_campo || "Sem Grupo";
+                    if (['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tipoPioneiro)) {
+                        novosStats.pioneirosRegulares++;
+                    }
+
+                    if (!data.dados_eclesiasticos?.batizado) novosStats.naoBatizados++;
+
+                    const grupo = data.dados_eclesiasticos?.grupo_campo || "Sem Grupo";
                     contagemGrupos[grupo] = (contagemGrupos[grupo] || 0) + 1;
 
-                    if (sit === 'Ativo' && pess.data_nascimento) {
-                        const [ano, mes, dia] = pess.data_nascimento.split('-').map(Number);
-                        let idade = hoje.getFullYear() - ano;
-                        const m = (hoje.getMonth() + 1) - mes;
-                        if (m < 0 || (m === 0 && hoje.getDate() < dia)) idade--;
-                        
-                        if (idade < 13) contagemFaixa['Crianças']++;
-                        else if (idade < 30) contagemFaixa['Jovens']++;
-                        else if (idade < 60) contagemFaixa['Adultos']++;
-                        else contagemFaixa['Idosos']++;
+                    // Faixa Etária (apenas Ativos/Irregulares/Inativos)
+                    if (data.dados_pessoais?.data_nascimento) {
+                        const dataNasc = parseData(data.dados_pessoais.data_nascimento);
+                        if (dataNasc) {
+                            let idade = hoje.getFullYear() - dataNasc.getFullYear();
+                            const m = hoje.getMonth() - dataNasc.getMonth();
+                            if (m < 0 || (m === 0 && hoje.getDate() < dataNasc.getDate())) idade--;
+
+                            if (idade < 13) contagemFaixa['Crianças']++;
+                            else if (idade < 30) contagemFaixa['Jovens']++;
+                            else if (idade < 60) contagemFaixa['Adultos']++;
+                            else contagemFaixa['Idosos']++;
+                        }
                     }
                 }
             });
-            
+
             setStats(novosStats);
-            setTotalEsperadoRelatorios(novosStats.ativos + novosStats.irregulares); 
+
+            // TOTAL ESPERADO = Ativos + Irregulares
+            // Como forçamos a Kethleen (Excluída) a virar "Ativa" se ela relatou, ela entra aqui.
+            setTotalEsperadoRelatorios(novosStats.ativos + novosStats.irregulares);
+
             setDadosGrupos(Object.keys(contagemGrupos).map(g => ({ name: g, qtd: contagemGrupos[g] })));
             setDadosFaixaEtaria([
                 { name: 'Crianças (<13)', value: contagemFaixa['Crianças'] },
@@ -157,99 +224,110 @@ export default function Dashboard() {
                 { name: 'Idosos (60+)', value: contagemFaixa['Idosos'] }
             ]);
 
-            // --- 3. RELATÓRIOS DO MÊS CORRENTE ---
-            const qRels = query(collection(db, "relatorios"), where("mes_referencia", "==", mesRelatorioIso));
-            const snapRels = await getDocs(qRels);
-            setRelatoriosColetados(snapRels.size);
+            // 4. HISTÓRICO DE ASSISTÊNCIA (Mês Ref + 5 anteriores)
+            const dataSeisMesesAtras = new Date(anoRef, mesRef - 6, 1);
+            const isoSeisMeses = dataSeisMesesAtras.toISOString().slice(0, 10);
 
-            // --- 4. ASSISTÊNCIA DO MÊS ---
-            const qAssist = query(collection(db, "assistencia"), where("data", ">=", `${mesAtualIso}-01`), where("data", "<=", `${mesAtualIso}-31`));
+            const qAssist = query(collection(db, "assistencia"), where("data", ">=", isoSeisMeses));
             const snapAssist = await getDocs(qAssist);
-            
-            let somaMeio = 0, contaMeio = 0, somaFim = 0, contaFim = 0;
+
+            const assistenciaMap = {};
+
             snapAssist.forEach(doc => {
                 const d = doc.data();
-                if (d.tipoKey === 'MEIO_SEMANA' && d.presentes > 0) { somaMeio += d.presentes; contaMeio++; }
-                if (d.tipoKey === 'FIM_SEMANA' && d.presentes > 0) { somaFim += d.presentes; contaFim++; }
+                const mesKey = d.data.slice(0, 7);
+                if (!assistenciaMap[mesKey]) assistenciaMap[mesKey] = { meio: [], fim: [] };
+
+                const numPresentes = Number(d.presentes);
+                if (numPresentes > 0) {
+                    if (d.tipoKey === 'MEIO_SEMANA') assistenciaMap[mesKey].meio.push(numPresentes);
+                    if (d.tipoKey === 'FIM_SEMANA') assistenciaMap[mesKey].fim.push(numPresentes);
+                }
             });
 
-            setMediaAssistencia({ meio: contaMeio ? Math.round(somaMeio / contaMeio) : 0, fim: contaFim ? Math.round(somaFim / contaFim) : 0 });
+            const dadosGraficoAssistencia = Object.keys(assistenciaMap).sort().map(mes => {
+                const arrMeio = assistenciaMap[mes].meio;
+                const arrFim = assistenciaMap[mes].fim;
+                const mediaMeio = arrMeio.length ? Math.round(arrMeio.reduce((a, b) => a + b, 0) / arrMeio.length) : 0;
+                const mediaFim = arrFim.length ? Math.round(arrFim.reduce((a, b) => a + b, 0) / arrFim.length) : 0;
+                const [ano, m] = mes.split('-');
+                return {
+                    mesLabel: `${m}/${ano.slice(2)}`,
+                    meio: mediaMeio,
+                    fim: mediaFim,
+                    mesSort: mes
+                };
+            });
 
-            // --- 5. GRÁFICO DE ESTUDOS (ÚLTIMOS 12 MESES) ---
+            setDadosAssistencia(dadosGraficoAssistencia);
+
+            // Média do Mês de Referência (Janeiro)
+            const dadosMesRef = assistenciaMap[mesRelatorioIso] || { meio: [], fim: [] };
+            const mediaMeioRef = dadosMesRef.meio.length ? Math.round(dadosMesRef.meio.reduce((a, b) => a + b, 0) / dadosMesRef.meio.length) : 0;
+            const mediaFimRef = dadosMesRef.fim.length ? Math.round(dadosMesRef.fim.reduce((a, b) => a + b, 0) / dadosMesRef.fim.length) : 0;
+
+            setMediaAssistenciaMes({ meio: mediaMeioRef, fim: mediaFimRef });
+
+            // 5. GRÁFICO DE ESTUDOS (Últimos 12 meses até Janeiro)
             const mesesUltimos12 = [];
             for (let i = 11; i >= 0; i--) {
-                const d = new Date();
-                d.setMonth(d.getMonth() - i);
-                const iso = d.toISOString().slice(0, 7); 
-                
-                const mesAbrev = d.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
-                const anoAbrev = d.getFullYear().toString().slice(-2);
-                const label = `${mesAbrev}/${anoAbrev}`; 
-
+                const d = new Date(anoRef, mesRef - 1 - i, 1);
+                const iso = d.toISOString().slice(0, 7);
+                const label = `${d.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')}/${d.getFullYear().toString().slice(-2)}`;
                 mesesUltimos12.push({ iso, label, pub: 0, aux: 0, reg: 0 });
             }
 
             const startIso = mesesUltimos12[0].iso;
             const endIso = mesesUltimos12[11].iso;
 
-            const qEstudos = query(collection(db, "relatorios"), 
-                where("mes_referencia", ">=", startIso),
-                where("mes_referencia", "<=", endIso)
-            );
-            
+            const qEstudos = query(collection(db, "relatorios"), where("mes_referencia", ">=", startIso), where("mes_referencia", "<=", endIso));
             const snapEstudos = await getDocs(qEstudos);
 
             snapEstudos.forEach(doc => {
                 const d = doc.data();
-                
-                // Filtro anti-fantasma (mantido da versão anterior)
-                if (!idsPublicadoresValidos.has(d.id_publicador)) return;
+                // Usa IDs válidos na época
+                if (!idsConsideradosValidos.has(d.id_publicador)) return;
 
                 const mes = d.mes_referencia;
                 const estudos = Number(d.atividade?.estudos || 0);
-                
                 if (estudos > 0) {
                     const bucket = mesesUltimos12.find(m => m.iso === mes);
                     if (bucket) {
                         const tipoBase = d.atividade?.tipo_pioneiro_mes || 'Publicador';
                         const isAux = d.atividade?.pioneiro_auxiliar_mes === true || tipoBase === 'Pioneiro Auxiliar';
                         const isReg = ['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tipoBase);
-
-                        if (isReg) {
-                            bucket.reg += estudos;
-                        } else if (isAux) {
-                            bucket.aux += estudos;
-                        } else {
-                            bucket.pub += estudos;
-                        }
+                        if (isReg) bucket.reg += estudos; else if (isAux) bucket.aux += estudos; else bucket.pub += estudos;
                     }
                 }
             });
-
             setDadosEstudos(mesesUltimos12);
 
-        } catch (error) { console.error("Erro dashboard:", error); } 
+        } catch (error) { console.error("Erro dashboard:", error); }
         finally { setLoading(false); }
     };
 
+    // Dados para o Gráfico de Pizza
     const dataSituacao = [
-        { name: 'Ativos', value: stats.ativos },
-        { name: 'Irregulares', value: stats.irregulares },
-        { name: 'Inativos', value: stats.inativos },
-        { name: 'Removidos', value: stats.removidos },
+        { name: 'Ativos', value: stats.ativos, color: COLORS_SITUACAO['Ativos'] },
+        { name: 'Irregulares', value: stats.irregulares, color: COLORS_SITUACAO['Irregulares'] },
+        { name: 'Inativos', value: stats.inativos, color: COLORS_SITUACAO['Inativos'] },
+        { name: 'Removidos', value: stats.removidos, color: COLORS_SITUACAO['Removidos'] },
     ].filter(d => d.value > 0);
 
     const porcentagemRelatorios = totalEsperadoRelatorios > 0 ? Math.round((relatoriosColetados / totalEsperadoRelatorios) * 100) : 0;
+    const WrapperAssistencia = isAdmin ? Link : 'div';
 
     if (loading) return <div className="p-8 text-center text-gray-500">Carregando painel...</div>;
 
     return (
         <div className="p-4 md:p-8 max-w-7xl mx-auto pb-24">
+            <BarraSincronizacao />
             <div className="mb-8">
                 <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><TrendingUp className="text-teocratico-blue" /> Painel de Controle</h1>
                 <p className="text-sm text-gray-500 mt-1">Visão geral e indicadores da congregação.</p>
             </div>
 
+            {/* CARDS TOPO */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
                 <Link to="/relatorios" className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 hover:shadow-md transition duration-200 group">
                     <div className="flex justify-between items-start mb-4">
@@ -265,18 +343,25 @@ export default function Dashboard() {
                     <p className="text-xs text-gray-400 text-right">{porcentagemRelatorios}% coletado</p>
                 </Link>
 
-                <Link to="/reunioes" className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 hover:shadow-md transition duration-200 group">
+                <WrapperAssistencia
+                    to="/reunioes"
+                    className={`bg-white p-6 rounded-2xl shadow-sm border border-gray-200 transition duration-200 group ${isAdmin ? 'hover:shadow-md cursor-pointer' : 'cursor-default'}`}
+                >
                     <div className="flex justify-between items-center mb-4">
-                        <p className="text-sm font-medium text-gray-500 flex items-center gap-1 group-hover:text-blue-600 transition-colors">Média Assistência (Mês Atual)<ArrowRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" /></p>
-                        <Calendar size={20} className="text-gray-300 group-hover:text-blue-600 transition-colors" />
+                        <p className={`text-sm font-medium text-gray-500 flex items-center gap-1 ${isAdmin ? 'group-hover:text-blue-600' : ''} transition-colors`}>
+                            Média Assistência ({nomeMesRelatorio})
+                            {isAdmin && <ArrowRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />}
+                        </p>
+                        <Calendar size={20} className={`text-gray-300 ${isAdmin ? 'group-hover:text-blue-600' : ''} transition-colors`} />
                     </div>
                     <div className="grid grid-cols-2 gap-4">
-                        <div className="text-center p-3 bg-orange-50 rounded-xl border border-orange-100"><span className="block text-2xl font-bold text-gray-800">{mediaAssistencia.meio}</span><span className="text-[10px] uppercase font-bold text-orange-600">Vida e Min.</span></div>
-                        <div className="text-center p-3 bg-blue-50 rounded-xl border border-blue-100"><span className="block text-2xl font-bold text-gray-800">{mediaAssistencia.fim}</span><span className="text-[10px] uppercase font-bold text-blue-600">Fim de Sem.</span></div>
+                        <div className="text-center p-3 bg-orange-50 rounded-xl border border-orange-100"><span className="block text-2xl font-bold text-gray-800">{mediaAssistenciaMes.meio}</span><span className="text-[10px] uppercase font-bold text-orange-600">Vida e Min.</span></div>
+                        <div className="text-center p-3 bg-blue-50 rounded-xl border border-blue-100"><span className="block text-2xl font-bold text-gray-800">{mediaAssistenciaMes.fim}</span><span className="text-[10px] uppercase font-bold text-blue-600">Fim de Sem.</span></div>
                     </div>
-                </Link>
+                </WrapperAssistencia>
             </div>
 
+            {/* SEÇÃO 2: TOTAIS E SITUAÇÃO */}
             <div className="bg-white rounded-2xl shadow-sm border border-gray-200 mb-8 overflow-hidden">
                 <Link to="/publicadores" className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50 hover:bg-gray-100 transition cursor-pointer group">
                     <h3 className="font-bold text-gray-700 flex items-center gap-2 group-hover:text-teocratico-blue"><Users size={18} /> Totais <ArrowRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity" /></h3>
@@ -290,16 +375,13 @@ export default function Dashboard() {
                             <div className="flex justify-between items-center pb-2 border-b border-gray-50"><span className="text-sm text-gray-600 font-medium">Ativos</span><span className="bg-green-100 text-green-700 px-2 py-0.5 rounded text-sm font-bold">{stats.ativos}</span></div>
                             <div className="flex justify-between items-center pb-2 border-b border-gray-50"><span className="text-sm text-gray-600 font-medium">Irregulares</span><span className="bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded text-sm font-bold">{stats.irregulares}</span></div>
                             <div className="flex justify-between items-center pb-2 border-b border-gray-50"><span className="text-sm text-gray-600 font-medium">Inativos</span><span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-sm font-bold">{stats.inativos}</span></div>
-                            <div className="flex justify-between items-center opacity-60"><span className="text-sm text-gray-500">Removidos</span><span className="text-sm font-bold text-gray-500">{stats.removidos}</span></div>
                         </div>
                     </div>
-
                     <div className="p-6">
                         <p className="text-[10px] font-bold text-gray-400 uppercase mb-4 tracking-wider">Serviço</p>
                         <div className="bg-blue-50 p-4 rounded-xl text-center mb-6 border border-blue-100"><span className="block text-3xl font-extrabold text-blue-600">{stats.pioneirosRegulares}</span><span className="text-xs text-blue-600 font-bold uppercase">Pioneiros Reg.</span></div>
                         <div className="flex justify-between items-center pb-2 border-b border-gray-50"><span className="text-sm text-gray-600">Não Batizados</span><span className="font-bold text-gray-700">{stats.naoBatizados}</span></div>
                     </div>
-
                     <div className="p-6">
                         <p className="text-[10px] font-bold text-gray-400 uppercase mb-4 tracking-wider">Designados</p>
                         <div className="space-y-4">
@@ -308,57 +390,120 @@ export default function Dashboard() {
                             <div className="flex justify-between items-center"><span className="text-sm text-gray-600">Varões Hab.</span><span className="font-bold text-green-600 text-lg">{stats.varoes}</span></div>
                         </div>
                     </div>
-
                     <div className="p-6 flex flex-col justify-center items-center bg-gray-50/50">
-                         <div style={{ width: '100%', height: '180px' }}>
+                        <div style={{ width: '100%', height: '180px' }}>
                             {isMounted && (
-                                <ResponsiveContainer width="100%" height={180} minWidth={0} debounce={200}>
+                                <ResponsiveContainer width="100%" height={180}>
                                     <PieChart>
                                         <Pie data={dataSituacao} innerRadius={40} outerRadius={60} paddingAngle={2} dataKey="value" stroke="none">
-                                            {dataSituacao.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={COLORS_SITUACAO[index % COLORS_SITUACAO.length]} />
-                                            ))}
+                                            {dataSituacao.map((entry, index) => (<Cell key={`cell-${index}`} fill={entry.color} />))}
                                         </Pie>
-                                        <Tooltip contentStyle={{borderRadius: '8px', border:'none', boxShadow:'0 4px 6px -1px rgba(0,0,0,0.1)'}} />
+                                        <Tooltip contentStyle={{ borderRadius: '8px', border: 'none' }} />
                                         <Legend verticalAlign="bottom" height={36} iconType="circle" iconSize={8} />
                                     </PieChart>
                                 </ResponsiveContainer>
                             )}
                         </div>
+                        {/* ALERTAS */}
+                        <div className="w-full mt-2 text-center space-y-1">
+                            {stats.removidos > 0 && <div className="text-[10px] text-gray-500 font-medium">Removidos: <strong>{stats.removidos}</strong></div>}
+                            {stats.excluidos > 0 && <div className="text-[10px] text-gray-400">Excluídos (mudança): {stats.excluidos}</div>}
+                        </div>
                     </div>
                 </div>
             </div>
 
+            {/* SEÇÃO 3: GRÁFICOS */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+
+                {/* 3.1: HISTÓRICO DE ASSISTÊNCIA */}
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                    <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
+                        <Calendar size={18} className="text-blue-600" /> Histórico de Assistência (Média)
+                    </h3>
+                    <div style={{ width: '100%', height: '250px' }}>
+                        {isMounted && dadosAssistencia.length > 0 ? (
+                            <ResponsiveContainer width="100%" height={250}>
+                                <AreaChart data={dadosAssistencia} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                    <defs>
+                                        <linearGradient id="colorMeio" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#F59E0B" stopOpacity={0.8} />
+                                            <stop offset="95%" stopColor="#F59E0B" stopOpacity={0} />
+                                        </linearGradient>
+                                        <linearGradient id="colorFim" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.8} />
+                                            <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                                    <XAxis dataKey="mesLabel" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} />
+                                    <Tooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
+                                    <Legend verticalAlign="top" iconType="circle" height={36} />
+                                    <Area type="monotone" dataKey="meio" name="Vida e Ministério" stroke="#F59E0B" fillOpacity={1} fill="url(#colorMeio)" />
+                                    <Area type="monotone" dataKey="fim" name="Fim de Semana" stroke="#3B82F6" fillOpacity={1} fill="url(#colorFim)" />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        ) : (
+                            <div className="h-full flex items-center justify-center text-gray-300 text-sm italic">
+                                Sem dados de assistência recentes.
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* 3.2: ESTUDOS BÍBLICOS */}
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                    <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
+                        <BookOpen size={18} className="text-green-600" /> Evolução de Estudos
+                    </h3>
+                    <div style={{ width: '100%', height: '250px' }}>
+                        {isMounted && dadosEstudos.length > 0 ? (
+                            <ResponsiveContainer width="100%" height={250}>
+                                <BarChart data={dadosEstudos} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} />
+                                    <Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
+                                    <Bar dataKey="pub" name="Pubs" stackId="a" fill={COLORS_ESTUDOS.pub} radius={[0, 0, 0, 0]} label={(props) => <CustomBarLabel {...props} pKey="pub" data={dadosEstudos} />} />
+                                    <Bar dataKey="aux" name="Aux." stackId="a" fill={COLORS_ESTUDOS.aux} radius={[0, 0, 0, 0]} label={(props) => <CustomBarLabel {...props} pKey="aux" data={dadosEstudos} />} />
+                                    <Bar dataKey="reg" name="Reg." stackId="a" fill={COLORS_ESTUDOS.reg} radius={[4, 4, 0, 0]} label={(props) => <CustomBarLabel {...props} pKey="reg" data={dadosEstudos} />} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        ) : <div className="h-full flex items-center justify-center text-gray-300 italic">Calculando histórico...</div>}
+                    </div>
+                </div>
+            </div>
+
+            {/* SEÇÃO 4: GRUPOS E IDADE */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
                     <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><Users2 size={18} /> Por Grupo de Campo</h3>
-                    <div style={{ width: '100%', height: '250px' }}>
-                         {isMounted && dadosGrupos.length > 0 ? (
-                            <ResponsiveContainer width="100%" height={250} minWidth={0} debounce={200}>
+                    <div style={{ width: '100%', height: '200px' }}>
+                        {isMounted && dadosGrupos.length > 0 ? (
+                            <ResponsiveContainer width="100%" height={200}>
                                 <BarChart data={dadosGrupos} layout="vertical" margin={{ left: 10, right: 30 }}>
                                     <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f0f0f0" />
                                     <XAxis type="number" hide />
-                                    <YAxis dataKey="name" type="category" width={90} tick={{fontSize: 11, fill: '#4B5563'}} />
-                                    <Tooltip cursor={{fill: '#f9fafb'}} contentStyle={{borderRadius: '8px', border: 'none'}} />
-                                    <Bar dataKey="qtd" fill="#8B5CF6" radius={[0, 4, 4, 0]} barSize={24} label={{ position: 'right', fill: '#6B7280', fontSize: 12 }} />
+                                    <YAxis dataKey="name" type="category" width={90} tick={{ fontSize: 11, fill: '#4B5563' }} />
+                                    <Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{ borderRadius: '8px', border: 'none' }} />
+                                    <Bar dataKey="qtd" fill="#8B5CF6" radius={[0, 4, 4, 0]} barSize={20} label={{ position: 'right', fill: '#6B7280', fontSize: 12 }} />
                                 </BarChart>
                             </ResponsiveContainer>
-                         ) : <div className="h-full flex items-center justify-center text-gray-300 text-sm italic">Carregando grupos...</div>}
+                        ) : <div className="h-full flex items-center justify-center text-gray-300 italic">Carregando grupos...</div>}
                     </div>
                 </div>
 
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
                     <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><BarChart3 size={18} /> Faixa Etária (Ativos)</h3>
-                    <div style={{ width: '100%', height: '250px' }}>
+                    <div style={{ width: '100%', height: '200px' }}>
                         {isMounted && (
-                            <ResponsiveContainer width="100%" height={250} minWidth={0} debounce={200}>
+                            <ResponsiveContainer width="100%" height={200}>
                                 <PieChart>
-                                    <Pie data={dadosFaixaEtaria} innerRadius={50} outerRadius={80} paddingAngle={4} dataKey="value" stroke="none" labelLine={false} label={({ percent }) => `${(percent * 100).toFixed(0)}%`}>
-                                        {dadosFaixaEtaria.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={COLORS_FAIXA[index % COLORS_FAIXA.length]} />
-                                        ))}
+                                    <Pie data={dadosFaixaEtaria} innerRadius={40} outerRadius={70} paddingAngle={4} dataKey="value" stroke="none" labelLine={false} label={({ percent }) => `${(percent * 100).toFixed(0)}%`}>
+                                        {dadosFaixaEtaria.map((entry, index) => (<Cell key={`cell-${index}`} fill={COLORS_FAIXA[index % COLORS_FAIXA.length]} />))}
                                     </Pie>
-                                    <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow:'0 4px 6px -1px rgba(0,0,0,0.1)'}} />
+                                    <Tooltip contentStyle={{ borderRadius: '8px', border: 'none' }} />
                                     <Legend verticalAlign="bottom" height={36} iconType="circle" />
                                 </PieChart>
                             </ResponsiveContainer>
@@ -367,77 +512,36 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 mb-8">
-                <div className="flex justify-between items-center mb-6">
-                    <h3 className="font-bold text-gray-700 flex items-center gap-2">
-                        <BookOpen size={18} className="text-green-600" /> Evolução de Estudos Bíblicos
-                    </h3>
-                    <div className="flex gap-3 text-xs font-medium">
-                        <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-green-500"></div> Regular</div>
-                        <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-orange-400"></div> Auxiliar</div>
-                        <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-gray-400"></div> Publicador</div>
-                    </div>
-                </div>
-                <div style={{ width: '100%', height: '300px' }}>
-                    {isMounted && dadosEstudos.length > 0 ? (
-                        <ResponsiveContainer width="100%" height={300} minWidth={0} debounce={200}>
-                            <BarChart data={dadosEstudos} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                                <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#9CA3AF'}} dy={10} />
-                                <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#9CA3AF'}} />
-                                <Tooltip 
-                                    cursor={{fill: '#f9fafb'}} 
-                                    contentStyle={{borderRadius: '8px', border: 'none', boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}
-                                    labelStyle={{fontWeight: 'bold', color: '#374151', marginBottom: '8px'}}
-                                />
-                                
-                                {/* USO DA LABEL CORRIGIDA PASSANDO O ARRAY DE DADOS */}
-                                <Bar dataKey="pub" name="Publicadores" stackId="a" fill={COLORS_ESTUDOS.pub} radius={[0, 0, 0, 0]} barSize={40} 
-                                    label={(props) => <CustomBarLabel {...props} pKey="pub" data={dadosEstudos} />} 
-                                />
-                                <Bar dataKey="aux" name="Pioneiros Aux." stackId="a" fill={COLORS_ESTUDOS.aux} radius={[0, 0, 0, 0]} barSize={40} 
-                                    label={(props) => <CustomBarLabel {...props} pKey="aux" data={dadosEstudos} />} 
-                                />
-                                <Bar dataKey="reg" name="Pioneiros Reg." stackId="a" fill={COLORS_ESTUDOS.reg} radius={[4, 4, 0, 0]} barSize={40} 
-                                    label={(props) => <CustomBarLabel {...props} pKey="reg" data={dadosEstudos} />} 
-                                />
-                            </BarChart>
-                        </ResponsiveContainer>
-                    ) : (
-                        <div className="h-full flex flex-col items-center justify-center text-gray-300">
-                            <BarChart3 size={32} className="mb-2 opacity-50"/>
-                            <span className="text-sm italic">Calculando histórico de estudos...</span>
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            {/* RESTO DO CÓDIGO (SEÇÃO 4 e ATALHOS) MANTIDO... */}
+            {/* AVISOS E BOTÕES DE AÇÃO */}
             {stats.irregulares > 0 ? (
                 <div className="bg-red-50 p-4 rounded-xl border border-red-100 flex items-center gap-4 mb-8">
                     <AlertCircle className="text-red-600 shrink-0" size={24} />
-                    <div><h4 className="font-bold text-red-800 text-sm">Atenção Necessária</h4><p className="text-xs text-red-600">Existem <strong>{stats.irregulares} publicadores irregulares</strong>. O acompanhamento pastoral é sugerido.</p></div>
+                    <div><h4 className="font-bold text-red-800 text-sm">Atenção Necessária</h4><p className="text-xs text-red-600">Existem <strong>{stats.irregulares} publicadores irregulares</strong>.</p></div>
                 </div>
             ) : (
                 <div className="bg-green-50 p-4 rounded-xl border border-green-100 flex items-center gap-4 mb-8">
                     <Smile className="text-green-600 shrink-0" size={24} />
-                    <div><h4 className="font-bold text-green-800 text-sm">Tudo Certo!</h4><p className="text-xs text-green-600">Nenhum publicador irregular. A congregação está com ótima saúde espiritual.</p></div>
+                    <div><h4 className="font-bold text-green-800 text-sm">Tudo Certo!</h4><p className="text-xs text-green-600">Nenhum publicador irregular.</p></div>
                 </div>
             )}
-            
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+            <div className={`grid grid-cols-1 ${isAdmin ? 'md:grid-cols-3' : 'md:grid-cols-1'} gap-4`}>
                 <Link to="/relatorios" className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:border-blue-300 transition flex items-center gap-4 group">
                     <div className="bg-blue-100 p-3 rounded-full text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition"><FileText size={24} /></div>
-                    <div><h3 className="font-bold text-gray-800">Coletar Relatórios</h3><p className="text-xs text-gray-500">Lançar atividade do mês</p></div>
+                    <div><h3 className="font-bold text-gray-800">Relatórios</h3><p className="text-xs text-gray-500">Visualizar atividade</p></div>
                 </Link>
-                <Link to="/publicadores/novo" className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:border-green-300 transition flex items-center gap-4 group">
-                    <div className="bg-green-100 p-3 rounded-full text-green-600 group-hover:bg-green-600 group-hover:text-white transition"><Users size={24} /></div>
-                    <div><h3 className="font-bold text-gray-800">Novo Publicador</h3><p className="text-xs text-gray-500">Cadastrar cartão S-21</p></div>
-                </Link>
-                <Link to="/reunioes" className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:border-orange-300 transition flex items-center gap-4 group">
-                    <div className="bg-orange-100 p-3 rounded-full text-orange-600 group-hover:bg-orange-600 group-hover:text-white transition"><Calendar size={24} /></div>
-                    <div><h3 className="font-bold text-gray-800">Assistência S-88</h3><p className="text-xs text-gray-500">Lançar reuniões</p></div>
-                </Link>
+                {isAdmin && (
+                    <Link to="/publicadores/novo" className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:border-green-300 transition flex items-center gap-4 group">
+                        <div className="bg-green-100 p-3 rounded-full text-green-600 group-hover:bg-green-600 group-hover:text-white transition"><Users size={24} /></div>
+                        <div><h3 className="font-bold text-gray-800">Novo Publicador</h3><p className="text-xs text-gray-500">Cadastrar cartão S-21</p></div>
+                    </Link>
+                )}
+                {isAdmin && (
+                    <Link to="/reunioes" className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:border-orange-300 transition flex items-center gap-4 group">
+                        <div className="bg-orange-100 p-3 rounded-full text-orange-600 group-hover:bg-orange-600 group-hover:text-white transition"><Calendar size={24} /></div>
+                        <div><h3 className="font-bold text-gray-800">Assistência S-88</h3><p className="text-xs text-gray-500">Lançar reuniões</p></div>
+                    </Link>
+                )}
             </div>
         </div>
     );

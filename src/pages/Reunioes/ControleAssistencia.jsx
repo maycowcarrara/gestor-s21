@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { gerarGradeSemanal } from '../../utils/assistenciaUtils';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { gerarPDF_S88 } from '../../utils/geradorS88';
+import { atualizarEstatisticasAssistenciaClient } from '../../utils/assistenciaAggregator';
 
 export default function ControleAssistencia() {
     const [dataReferencia, setDataReferencia] = useState(new Date());
@@ -18,7 +19,7 @@ export default function ControleAssistencia() {
     const [salvandoId, setSalvandoId] = useState(null);
     const [isMounted, setIsMounted] = useState(false);
 
-    // --- LÓGICA DO ANO DE SERVIÇO (S-88) ---
+    // --- LÓGICA DO ANO DE SERVIÇO (S-88) ---MCMC
     const getAnoServicoAtual = () => {
         const hoje = new Date();
         // Se estamos em Setembro (mês 8) ou depois, o ano de serviço começa neste ano civil.
@@ -129,6 +130,9 @@ export default function ControleAssistencia() {
 
             // Salva no Firestore (Trigger no backend atualizará as estatísticas automaticamente)
             await setDoc(docRef, dadosParaSalvar, { merge: true });
+
+            // Isso garante que a média mensal seja recalculada imediatamente no navegador
+            await atualizarEstatisticasAssistenciaClient(reuniaoObj.data);
 
             setSemanas(prev => {
                 const novas = [...prev];

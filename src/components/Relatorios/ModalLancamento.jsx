@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { db } from '../../config/firebase';
-import { collection, addDoc, Timestamp, doc, updateDoc } from 'firebase/firestore';
-import { X, Save, Clock, BookOpen, Calendar, Star } from 'lucide-react';
+// Adicionado deleteDoc
+import { collection, addDoc, Timestamp, doc, updateDoc, deleteDoc } from 'firebase/firestore'; 
+// Adicionado Trash2
+import { X, Save, Clock, BookOpen, Calendar, Star, Trash2 } from 'lucide-react'; 
 import toast from 'react-hot-toast';
 
 export default function ModalLancamento({ idPublicador, dadosPublicador, relatorioParaEditar, onClose, onSucesso }) {
-
     const isEditing = !!relatorioParaEditar;
+    const [saving, setSaving] = useState(false);
+    const [deleting, setDeleting] = useState(false); // Estado para o delete
 
     const tipoServicoInicial = isEditing
         ? relatorioParaEditar.atividade.tipo_pioneiro_mes
@@ -41,12 +44,32 @@ export default function ModalLancamento({ idPublicador, dadosPublicador, relator
         }
     }, [relatorioParaEditar, reset]);
 
-    const [saving, setSaving] = useState(false);
     const participou = watch("participou");
     const tipoServico = watch("tipo_servico_mes");
-
     const tiposComHoras = ["Pioneiro Auxiliar", "Pioneiro Regular", "Pioneiro Especial", "Missionário"];
     const deveRelatarHoras = tiposComHoras.includes(tipoServico);
+
+    // FUNÇÃO PARA EXCLUIR O REGISTRO
+    const handleExcluir = async () => {
+        if (!window.confirm("Tem certeza que deseja excluir este relatório? Esta ação não pode ser desfeita e afetará as médias anuais.")) {
+            return;
+        }
+
+        setDeleting(true);
+        try {
+            const docRef = doc(db, "relatorios", relatorioParaEditar.id);
+            await deleteDoc(docRef);
+            
+            toast.success("Relatório removido com sucesso!");
+            onSucesso();
+            onClose();
+        } catch (error) {
+            console.error(error);
+            toast.error("Erro ao excluir: " + error.message);
+        } finally {
+            setDeleting(false);
+        }
+    };
 
     const onSubmit = async (data) => {
         setSaving(true);
@@ -54,6 +77,7 @@ export default function ModalLancamento({ idPublicador, dadosPublicador, relator
             const [anoStr, mesStr] = data.mes_referencia.split('-');
             const anoCalendario = parseInt(anoStr);
             const mes = parseInt(mesStr);
+            // Regra de Negócio: Ano de serviço começa em Setembro
             const anoServico = mes >= 9 ? anoCalendario + 1 : anoCalendario;
 
             const payload = {
@@ -62,15 +86,11 @@ export default function ModalLancamento({ idPublicador, dadosPublicador, relator
                 mes_referencia: data.mes_referencia,
                 data_criacao: isEditing ? relatorioParaEditar.data_criacao : Timestamp.now(),
                 data_atualizacao: Timestamp.now(),
-
                 atividade: {
                     participou: data.participou,
                     tipo_pioneiro_mes: data.tipo_servico_mes,
-
-                    // INTEIROS APENAS (parseInt)
                     horas: (data.participou && deveRelatarHoras) ? parseInt(data.horas) || 0 : 0,
                     bonus_horas: (data.participou && deveRelatarHoras) ? parseInt(data.bonus_horas) || 0 : 0,
-
                     estudos: data.participou ? parseInt(data.estudos) || 0 : 0,
                     pioneiro_auxiliar_mes: data.tipo_servico_mes === "Pioneiro Auxiliar",
                     observacoes: data.observacoes || ""
@@ -101,7 +121,6 @@ export default function ModalLancamento({ idPublicador, dadosPublicador, relator
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
-
                 <div className="bg-teocratico-blue text-white p-4 flex justify-between items-center">
                     <h2 className="text-lg font-bold flex items-center gap-2">
                         <Clock size={20} /> {isEditing ? "Editar Relatório" : "Lançar Relatório"}
@@ -110,7 +129,7 @@ export default function ModalLancamento({ idPublicador, dadosPublicador, relator
                 </div>
 
                 <form onSubmit={handleSubmit(onSubmit)} className="p-6 space-y-5">
-
+                    {/* ... Campos de formulário permanecem iguais ... */}
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Mês de Referência</label>
                         <div className="relative">
@@ -123,8 +142,6 @@ export default function ModalLancamento({ idPublicador, dadosPublicador, relator
                         </div>
                     </div>
 
-                    <div className="border-t border-gray-100 my-2"></div>
-
                     <div className="flex items-center justify-between bg-blue-50 p-3 rounded-lg border border-blue-100">
                         <span className="font-medium text-blue-900">Participou no Ministério?</span>
                         <input type="checkbox" {...register("participou")} className="w-6 h-6 text-blue-600 rounded focus:ring-blue-500" />
@@ -132,8 +149,7 @@ export default function ModalLancamento({ idPublicador, dadosPublicador, relator
 
                     {participou && (
                         <div className="space-y-4 animate-in slide-in-from-top-2">
-
-                            <div>
+                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Serviu neste mês como:</label>
                                 <select
                                     {...register("tipo_servico_mes")}
@@ -148,8 +164,6 @@ export default function ModalLancamento({ idPublicador, dadosPublicador, relator
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">
-
-                                {/* HORAS - APENAS INTEIROS */}
                                 {deveRelatarHoras ? (
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Horas</label>
@@ -157,11 +171,10 @@ export default function ModalLancamento({ idPublicador, dadosPublicador, relator
                                             <Clock className="absolute left-3 top-2.5 text-gray-400 w-4 h-4" />
                                             <input
                                                 type="number"
-                                                step="1" // FORÇA PASSO INTEIRO
+                                                step="1"
                                                 min="0"
                                                 {...register("horas")}
                                                 className="w-full pl-9 pr-2 py-2 border rounded-lg font-bold text-gray-800 focus:ring-blue-500"
-                                                placeholder="0"
                                             />
                                         </div>
                                     </div>
@@ -171,8 +184,6 @@ export default function ModalLancamento({ idPublicador, dadosPublicador, relator
                                         <input disabled value="-" className="w-full p-2 border rounded-lg bg-gray-100 text-center" />
                                     </div>
                                 )}
-
-                                {/* ESTUDOS */}
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Estudos</label>
                                     <div className="relative">
@@ -182,13 +193,11 @@ export default function ModalLancamento({ idPublicador, dadosPublicador, relator
                                             min="0"
                                             {...register("estudos")}
                                             className="w-full pl-9 pr-2 py-2 border rounded-lg focus:ring-blue-500"
-                                            placeholder="0"
                                         />
                                     </div>
                                 </div>
                             </div>
 
-                            {/* BÔNUS - APENAS INTEIROS */}
                             {deveRelatarHoras && (
                                 <div className="bg-yellow-50 p-3 rounded-lg border border-yellow-100">
                                     <label className="block text-xs font-bold text-yellow-800 uppercase mb-1 flex items-center gap-1">
@@ -196,10 +205,9 @@ export default function ModalLancamento({ idPublicador, dadosPublicador, relator
                                     </label>
                                     <input
                                         type="number"
-                                        step="1" // FORÇA PASSO INTEIRO
+                                        step="1"
                                         min="0"
                                         {...register("bonus_horas")}
-                                        placeholder="Ex: 5"
                                         className="w-full text-sm p-2 border rounded focus:ring-yellow-500"
                                     />
                                 </div>
@@ -211,23 +219,37 @@ export default function ModalLancamento({ idPublicador, dadosPublicador, relator
                                     {...register("observacoes")}
                                     rows="2"
                                     className="w-full p-2 border rounded-lg text-sm focus:ring-blue-500"
-                                    placeholder="Observações..."
                                 ></textarea>
                             </div>
                         </div>
                     )}
 
-                    <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
-                        <button type="button" onClick={onClose} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition">Cancelar</button>
-                        <button
-                            type="submit"
-                            disabled={saving}
-                            className="bg-teocratico-blue text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition shadow flex items-center gap-2 disabled:opacity-50"
-                        >
-                            {saving ? 'Salvando...' : <><Save size={18} /> {isEditing ? "Atualizar" : "Salvar"}</>}
-                        </button>
-                    </div>
+                    {/* RODAPÉ DO MODAL COM BOTÃO DE EXCLUIR */}
+                    <div className="flex justify-between items-center pt-4 border-t border-gray-100">
+                        <div>
+                            {isEditing && (
+                                <button
+                                    type="button"
+                                    onClick={handleExcluir}
+                                    disabled={deleting || saving}
+                                    className="flex items-center gap-1 text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition text-sm font-medium disabled:opacity-50"
+                                >
+                                    <Trash2 size={16} /> {deleting ? 'Excluindo...' : 'Excluir'}
+                                </button>
+                            )}
+                        </div>
 
+                        <div className="flex gap-3">
+                            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition">Cancelar</button>
+                            <button
+                                type="submit"
+                                disabled={saving || deleting}
+                                className="bg-teocratico-blue text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition shadow flex items-center gap-2 disabled:opacity-50"
+                            >
+                                {saving ? 'Salvando...' : <><Save size={18} /> {isEditing ? "Atualizar" : "Salvar"}</>}
+                            </button>
+                        </div>
+                    </div>
                 </form>
             </div>
         </div>

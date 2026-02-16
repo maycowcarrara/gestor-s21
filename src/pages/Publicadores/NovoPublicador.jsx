@@ -3,12 +3,23 @@ import { useForm } from 'react-hook-form';
 import { db } from '../../config/firebase';
 import { collection, addDoc, updateDoc, Timestamp, doc, getDoc } from 'firebase/firestore';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { Save, User, MapPin, Phone, Briefcase, Mail, Languages, Droplets, Calendar, Star, ArrowLeft, Pencil } from 'lucide-react';
+import { Save, User, MapPin, Phone, Briefcase, Mail, Languages, Droplets, Calendar, Star, ArrowLeft, Pencil, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useAuth } from '../../contexts/AuthContext';
 
 export default function NovoPublicador() {
+    const { isAdmin } = useAuth();
     const { id } = useParams();
     const isEditMode = !!id;
+    const navigate = useNavigate();
+
+    // Proteção de Rota (Apenas Admin acessa)
+    useEffect(() => {
+        if (!isAdmin) {
+            // Opcional: Redirecionar se quiser forçar a saída
+            // navigate('/publicadores'); 
+        }
+    }, [isAdmin, navigate]);
 
     const { register, handleSubmit, watch, reset, formState: { errors } } = useForm({
         defaultValues: {
@@ -16,18 +27,23 @@ export default function NovoPublicador() {
             genero: "Masculino",
             batizado: true,
             pioneiro_tipo: "Nenhum",
-            designacao: "Nenhuma"
+            designacao: "Nenhuma",
+            situacao: "Ativo"
         }
     });
 
     const [loading, setLoading] = useState(false);
-    const [listaGrupos, setListaGrupos] = useState(["Hípica", "Santuário", "Salão do Reino", "IDM/LS Palmas"]);
-    const navigate = useNavigate();
+    const [listaGrupos, setListaGrupos] = useState([]);
+
+    // Monitora a situação para mudar a cor do box dinamicamente
+    const situacaoAtual = watch("situacao");
+    const isBatizado = watch("batizado");
+    const generoSelecionado = watch("genero");
 
     useEffect(() => {
         const carregarDados = async () => {
             try {
-                // 1. Carrega Grupos da Configuração
+                // 1. Carrega Grupos
                 const configRef = doc(db, "config", "geral");
                 const configSnap = await getDoc(configRef);
                 if (configSnap.exists() && configSnap.data().grupos) {
@@ -42,6 +58,7 @@ export default function NovoPublicador() {
 
                     if (docSnap.exists()) {
                         const data = docSnap.data();
+
                         let designacaoAtual = "Nenhuma";
                         const privs = data.dados_eclesiasticos?.privilegios || [];
                         if (privs.includes("Ancião")) designacaoAtual = "Ancião";
@@ -49,6 +66,7 @@ export default function NovoPublicador() {
                         else if (privs.includes("Varão Habilitado")) designacaoAtual = "Varão Habilitado";
 
                         reset({
+                            // Pessoais
                             nome_completo: data.dados_pessoais?.nome_completo,
                             data_nascimento: data.dados_pessoais?.data_nascimento,
                             genero: data.dados_pessoais?.genero || "Masculino",
@@ -59,13 +77,16 @@ export default function NovoPublicador() {
                             endereco: data.dados_pessoais?.endereco?.logradouro,
                             emergencia_nome: data.dados_pessoais?.contatos?.emergencia_nome,
                             emergencia_tel: data.dados_pessoais?.contatos?.emergencia_tel,
+
+                            // Eclesiásticos
                             batizado: data.dados_eclesiasticos?.batizado,
                             data_batismo: data.dados_eclesiasticos?.data_batismo,
                             data_inicio: data.dados_eclesiasticos?.data_inicio,
                             grupo_campo: data.dados_eclesiasticos?.grupo_campo,
                             pioneiro_tipo: data.dados_eclesiasticos?.pioneiro_tipo || "Nenhum",
                             data_inicio_pioneiro: data.dados_eclesiasticos?.data_designacao_pioneiro,
-                            designacao: designacaoAtual
+                            designacao: designacaoAtual,
+                            situacao: data.dados_eclesiasticos?.situacao || "Ativo"
                         });
                     } else {
                         toast.error("Publicador não encontrado.");
@@ -82,9 +103,6 @@ export default function NovoPublicador() {
         carregarDados();
     }, [id, isEditMode, navigate, reset]);
 
-    const isBatizado = watch("batizado");
-    const generoSelecionado = watch("genero");
-
     const onSubmit = async (data) => {
         setLoading(true);
         try {
@@ -92,9 +110,6 @@ export default function NovoPublicador() {
             if (data.designacao && data.designacao !== "Nenhuma") {
                 listaPrivilegios.push(data.designacao);
             }
-
-            // Garante que salvemos apenas o nome do grupo (string), nunca o objeto
-            const grupoSalvo = data.grupo_campo;
 
             const dadosBase = {
                 dados_pessoais: {
@@ -120,8 +135,11 @@ export default function NovoPublicador() {
                     data_batismo: (data.batizado && data.data_batismo) ? data.data_batismo : null,
                     data_inicio: data.data_inicio || null,
                     privilegios: listaPrivilegios,
-                    grupo_campo: grupoSalvo, // Salva string
-                    situacao: "Ativo",
+                    grupo_campo: data.grupo_campo,
+
+                    // SITUAÇÃO AGORA É SALVA CORRETAMENTE
+                    situacao: data.situacao,
+
                     pioneiro_tipo: data.pioneiro_tipo !== "Nenhum" ? data.pioneiro_tipo : null,
                     data_designacao_pioneiro: data.data_inicio_pioneiro || null
                 },
@@ -248,6 +266,28 @@ export default function NovoPublicador() {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
+                        {/* --- BLOCO DE SITUAÇÃO ATUALIZADO --- */}
+                        <div className={`col-span-2 p-4 rounded-lg border ${situacaoAtual === 'Ativo' ? 'bg-green-50 border-green-200' :
+                                situacaoAtual === 'Inativo' ? 'bg-orange-50 border-orange-200' :
+                                    situacaoAtual === 'Removido' ? 'bg-red-50 border-red-200' :
+                                        'bg-gray-100 border-gray-300' // Excluído
+                            }`}>
+                            <label className="block text-sm font-bold text-gray-800 mb-2">Situação do Publicador</label>
+                            <select {...register("situacao")} className="block w-full rounded-md border-gray-300 p-2 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                <option value="Ativo">Ativo (Regular)</option>
+                                <option value="Inativo">Inativo (Irregular +6 meses)</option>
+                                <option value="Removido">Removido (Disciplina Judicativa)</option>
+                                <option value="Excluído">Excluído (Mudou-se / Falecido / Saiu)</option>
+                            </select>
+
+                            {/* Alertas contextuais */}
+                            {(situacaoAtual === 'Removido' || situacaoAtual === 'Excluído') && (
+                                <p className="text-xs text-gray-600 mt-2 flex items-center gap-1 font-bold">
+                                    <AlertTriangle size={12} /> O publicador sairá da lista principal, mas o histórico de relatórios será preservado.
+                                </p>
+                            )}
+                        </div>
+
                         <div className="bg-blue-50 p-3 rounded border border-blue-100 col-span-2 md:col-span-1">
                             <label className="flex items-center gap-2 mb-2 font-medium text-blue-900 cursor-pointer">
                                 <input type="checkbox" {...register("batizado")} className="w-4 h-4 text-blue-600 rounded" />
@@ -270,9 +310,6 @@ export default function NovoPublicador() {
                                     {...register("data_inicio")}
                                     className="w-full border p-2 rounded text-sm bg-white focus:ring-2 focus:ring-green-400 outline-none"
                                 />
-                                <p className="text-[10px] text-blue-600 mt-1 leading-tight">
-                                    Data de chegada para cálculo correto dos relatórios.
-                                </p>
                             </div>
                         </div>
 
@@ -284,26 +321,22 @@ export default function NovoPublicador() {
                             </div>
                         </div>
 
-                        {/* CORREÇÃO DO SELECT DE GRUPOS */}
                         <div className="col-span-2">
                             <label className="block text-sm font-medium text-gray-700">Grupo de Campo</label>
                             <select {...register("grupo_campo")} className="mt-1 block w-full rounded-md border p-2 bg-yellow-50 font-medium">
                                 <option value="">Selecione...</option>
                                 {listaGrupos.map((g, index) => {
-                                    // Extrai o nome se for objeto, ou usa a string se for texto simples
                                     const nomeGrupo = typeof g === 'object' ? g.nome : g;
                                     return <option key={index} value={nomeGrupo}>{nomeGrupo}</option>;
                                 })}
                             </select>
                         </div>
 
-                        {/* DESIGNAÇÃO */}
                         {generoSelecionado === "Masculino" && (
                             <div className="col-span-2 border-t pt-4 mt-2">
                                 <label className="block text-sm font-bold text-gray-800 mb-3 flex items-center gap-2">
                                     <Star size={16} className="text-yellow-500" /> Designação / Privilégios
                                 </label>
-
                                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                                     <label className="cursor-pointer h-full block">
                                         <input type="radio" value="Nenhuma" {...register("designacao")} className="peer sr-only" />
@@ -311,21 +344,18 @@ export default function NovoPublicador() {
                                             <span className="text-sm font-medium text-gray-600">Nenhuma</span>
                                         </div>
                                     </label>
-
                                     <label className="cursor-pointer h-full block">
                                         <input type="radio" value="Varão Habilitado" {...register("designacao")} className="peer sr-only" />
                                         <div className="rounded-lg border border-gray-200 p-3 text-center hover:bg-green-50 peer-checked:bg-green-100 peer-checked:border-green-500 peer-checked:text-green-800 peer-checked:ring-1 peer-checked:ring-green-500 transition-all h-full flex items-center justify-center">
                                             <span className="text-sm font-bold">Varão Habilitado</span>
                                         </div>
                                     </label>
-
                                     <label className="cursor-pointer h-full block">
                                         <input type="radio" value="Servo Ministerial" {...register("designacao")} className="peer sr-only" />
                                         <div className="rounded-lg border border-gray-200 p-3 text-center hover:bg-blue-50 peer-checked:bg-blue-100 peer-checked:border-blue-500 peer-checked:text-blue-800 peer-checked:ring-1 peer-checked:ring-blue-500 transition-all h-full flex items-center justify-center">
                                             <span className="text-sm font-bold">Servo Ministerial</span>
                                         </div>
                                     </label>
-
                                     <label className="cursor-pointer h-full block">
                                         <input type="radio" value="Ancião" {...register("designacao")} className="peer sr-only" />
                                         <div className="rounded-lg border border-gray-200 p-3 text-center hover:bg-indigo-50 peer-checked:bg-indigo-100 peer-checked:border-indigo-500 peer-checked:text-indigo-800 peer-checked:ring-1 peer-checked:ring-indigo-500 transition-all h-full flex items-center justify-center">
@@ -333,7 +363,6 @@ export default function NovoPublicador() {
                                         </div>
                                     </label>
                                 </div>
-                                <p className="text-[10px] text-gray-400 mt-2 ml-1">* Selecione apenas uma designação.</p>
                             </div>
                         )}
 
@@ -349,7 +378,6 @@ export default function NovoPublicador() {
                                         <option value="Missionário">Missionário</option>
                                     </select>
                                 </div>
-
                                 <div>
                                     <label className="block text-xs text-gray-600 mb-1 font-bold">Data de Início (Pioneiro)</label>
                                     <input type="date" {...register("data_inicio_pioneiro")} className="block w-full rounded-md border p-2" />
