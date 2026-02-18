@@ -3,7 +3,7 @@ import { db } from '../config/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import {
     Users, FileText, TrendingUp, AlertCircle, Calendar, BarChart3,
-    Users2, Smile, ArrowRight, BookOpen, UserX
+    Users2, Smile, ArrowRight, BookOpen
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import {
@@ -54,7 +54,7 @@ export default function Dashboard() {
     const [dadosEstudos, setDadosEstudos] = useState([]);
     const [dadosAssistencia, setDadosAssistencia] = useState([]);
 
-    // Estados de totais
+    // Estados de totais (Mantidos para cálculos internos, mesmo sem os cards)
     const [relatoriosColetados, setRelatoriosColetados] = useState(0);
     const [totalEsperadoRelatorios, setTotalEsperadoRelatorios] = useState(0);
     const [nomeMesRelatorio, setNomeMesRelatorio] = useState("");
@@ -73,7 +73,6 @@ export default function Dashboard() {
             const hoje = new Date();
 
             // 1. DEFINIR DATA DE REFERÊNCIA (MÊS ANTERIOR AO ATUAL)
-            // Ex: Se hoje é 15/02/2026, a referência é Janeiro/2026
             const dataMesReferencia = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
             const anoRef = dataMesReferencia.getFullYear();
             const mesRef = dataMesReferencia.getMonth() + 1;
@@ -82,7 +81,6 @@ export default function Dashboard() {
             setNomeMesRelatorio(dataMesReferencia.toLocaleDateString('pt-BR', { month: 'long' }));
 
             // 2. BUSCAR RELATÓRIOS DO MÊS DE REFERÊNCIA PRIMEIRO
-            // Isso é crucial para identificar quem estava ativo NAQUELA ÉPOCA
             const qRels = query(collection(db, "relatorios"), where("mes_referencia", "==", mesRelatorioIso));
             const snapRels = await getDocs(qRels);
 
@@ -95,7 +93,6 @@ export default function Dashboard() {
                 idsQueRelataram.add(d.id_publicador);
             });
 
-            // O número de relatórios coletados é a quantidade de pessoas únicas que entregaram
             setRelatoriosColetados(idsQueRelataram.size);
 
             // 3. BUSCAR E PROCESSAR PUBLICADORES
@@ -111,13 +108,9 @@ export default function Dashboard() {
             const contagemGrupos = {};
             const contagemFaixa = { 'Crianças': 0, 'Jovens': 0, 'Adultos': 0, 'Idosos': 0 };
 
-            // IDs válidos para o gráfico de estudos (histórico)
             const idsConsideradosValidos = new Set();
-
-            // Data limite para considerar um cadastro válido (fim do mês de referência)
             const dataFimMesReferencia = new Date(anoRef, mesRef, 0, 23, 59, 59);
 
-            // Função auxiliar para tratar datas DD/MM/YYYY ou YYYY-MM-DD
             const parseData = (dataStr) => {
                 if (!dataStr) return null;
                 if (dataStr.includes('/')) {
@@ -133,11 +126,8 @@ export default function Dashboard() {
                 const id = doc.id;
                 let sit = data.dados_eclesiasticos?.situacao || "Ativo";
 
-                // --- LÓGICA DA "MÁQUINA DO TEMPO" ---
                 const entregouRelatorio = idsQueRelataram.has(id);
 
-                // Se a pessoa entregou relatório em Janeiro, ela conta como ATIVA para Janeiro,
-                // mesmo que hoje (Fevereiro) ela esteja como "Excluída", "Removida" ou "Inativa".
                 if (entregouRelatorio) {
                     if (['Excluído', 'Removido', 'Inativo'].includes(sit)) {
                         sit = 'Ativo';
@@ -146,39 +136,31 @@ export default function Dashboard() {
 
                 const dataInicioStr = data.dados_eclesiasticos?.data_inicio || data.dados_eclesiasticos?.data_batismo;
 
-                // --- FILTRO DE DATA FUTURA ---
-                // Se a pessoa NÃO entregou relatório, precisamos ver se ela já existia.
-                // Se a data de início for maior que o fim de Janeiro, ignoramos.
                 if (!entregouRelatorio && dataInicioStr) {
                     const dataInicio = parseData(dataInicioStr);
                     if (dataInicio && !isNaN(dataInicio.getTime())) {
-                        if (dataInicio > dataFimMesReferencia) return; // Pula este registro (futuro)
+                        if (dataInicio > dataFimMesReferencia) return;
                     }
                 }
 
-                // Se passou pelos filtros, é um publicador válido para a estatística
                 idsConsideradosValidos.add(id);
 
-                // --- CONTABILIZAÇÃO ---
                 if (sit === 'Excluído') {
                     novosStats.excluidos++;
                 } else if (sit === 'Removido') {
                     novosStats.removidos++;
                 } else {
-                    // Contagem principal (Ativos + Irregulares + Inativos)
                     novosStats.totalAtivosInativos++;
 
                     if (sit === 'Ativo') novosStats.ativos++;
                     else if (sit === 'Irregular') novosStats.irregulares++;
                     else if (sit === 'Inativo') novosStats.inativos++;
 
-                    // --- DETALHES (Apenas para quem compõe o corpo atual) ---
                     const privs = data.dados_eclesiasticos?.privilegios || [];
                     if (privs.includes('Ancião')) novosStats.anciaos++;
                     if (privs.includes('Servo Ministerial')) novosStats.servos++;
                     if (privs.includes('Varão Habilitado')) novosStats.varoes++;
 
-                    // Recupera tipo de pioneiro do relatório (para pegar histórico correto) ou usa o atual
                     let tipoPioneiro = data.dados_eclesiasticos?.pioneiro_tipo;
                     if (entregouRelatorio && mapaRelatoriosMes[id]?.atividade?.tipo_pioneiro_mes) {
                         tipoPioneiro = mapaRelatoriosMes[id].atividade.tipo_pioneiro_mes;
@@ -193,7 +175,6 @@ export default function Dashboard() {
                     const grupo = data.dados_eclesiasticos?.grupo_campo || "Sem Grupo";
                     contagemGrupos[grupo] = (contagemGrupos[grupo] || 0) + 1;
 
-                    // Faixa Etária (apenas Ativos/Irregulares/Inativos)
                     if (data.dados_pessoais?.data_nascimento) {
                         const dataNasc = parseData(data.dados_pessoais.data_nascimento);
                         if (dataNasc) {
@@ -211,9 +192,6 @@ export default function Dashboard() {
             });
 
             setStats(novosStats);
-
-            // TOTAL ESPERADO = Ativos + Irregulares
-            // Como forçamos a Kethleen (Excluída) a virar "Ativa" se ela relatou, ela entra aqui.
             setTotalEsperadoRelatorios(novosStats.ativos + novosStats.irregulares);
 
             setDadosGrupos(Object.keys(contagemGrupos).map(g => ({ name: g, qtd: contagemGrupos[g] })));
@@ -224,7 +202,7 @@ export default function Dashboard() {
                 { name: 'Idosos (60+)', value: contagemFaixa['Idosos'] }
             ]);
 
-            // 4. HISTÓRICO DE ASSISTÊNCIA (Mês Ref + 5 anteriores)
+            // 4. HISTÓRICO DE ASSISTÊNCIA
             const dataSeisMesesAtras = new Date(anoRef, mesRef - 6, 1);
             const isoSeisMeses = dataSeisMesesAtras.toISOString().slice(0, 10);
 
@@ -261,14 +239,14 @@ export default function Dashboard() {
 
             setDadosAssistencia(dadosGraficoAssistencia);
 
-            // Média do Mês de Referência (Janeiro)
+            // Média do Mês de Referência
             const dadosMesRef = assistenciaMap[mesRelatorioIso] || { meio: [], fim: [] };
             const mediaMeioRef = dadosMesRef.meio.length ? Math.round(dadosMesRef.meio.reduce((a, b) => a + b, 0) / dadosMesRef.meio.length) : 0;
             const mediaFimRef = dadosMesRef.fim.length ? Math.round(dadosMesRef.fim.reduce((a, b) => a + b, 0) / dadosMesRef.fim.length) : 0;
 
             setMediaAssistenciaMes({ meio: mediaMeioRef, fim: mediaFimRef });
 
-            // 5. GRÁFICO DE ESTUDOS (Últimos 12 meses até Janeiro)
+            // 5. GRÁFICO DE ESTUDOS
             const mesesUltimos12 = [];
             for (let i = 11; i >= 0; i--) {
                 const d = new Date(anoRef, mesRef - 1 - i, 1);
@@ -285,7 +263,6 @@ export default function Dashboard() {
 
             snapEstudos.forEach(doc => {
                 const d = doc.data();
-                // Usa IDs válidos na época
                 if (!idsConsideradosValidos.has(d.id_publicador)) return;
 
                 const mes = d.mes_referencia;
@@ -314,9 +291,6 @@ export default function Dashboard() {
         { name: 'Removidos', value: stats.removidos, color: COLORS_SITUACAO['Removidos'] },
     ].filter(d => d.value > 0);
 
-    const porcentagemRelatorios = totalEsperadoRelatorios > 0 ? Math.round((relatoriosColetados / totalEsperadoRelatorios) * 100) : 0;
-    const WrapperAssistencia = isAdmin ? Link : 'div';
-
     if (loading) return <div className="p-8 text-center text-gray-500">Carregando painel...</div>;
 
     return (
@@ -327,41 +301,7 @@ export default function Dashboard() {
                 <p className="text-sm text-gray-500 mt-1">Visão geral e indicadores da congregação.</p>
             </div>
 
-            {/* CARDS TOPO */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                <Link to="/relatorios" className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 hover:shadow-md transition duration-200 group">
-                    <div className="flex justify-between items-start mb-4">
-                        <div>
-                            <p className="text-sm font-medium text-gray-500 flex items-center gap-1 group-hover:text-blue-600 transition-colors">Relatórios de <strong className="capitalize">{nomeMesRelatorio}</strong><ArrowRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" /></p>
-                            <h3 className="text-3xl font-extrabold text-gray-800 mt-1">{relatoriosColetados} <span className="text-sm text-gray-400 font-normal">/ {totalEsperadoRelatorios}</span></h3>
-                        </div>
-                        <div className={`p-2 rounded-lg ${porcentagemRelatorios >= 100 ? 'bg-green-100 text-green-600' : 'bg-blue-50 text-blue-600'}`}><FileText size={24} /></div>
-                    </div>
-                    <div className="w-full bg-gray-100 rounded-full h-2.5 mb-1">
-                        <div className={`h-2.5 rounded-full transition-all duration-1000 ${porcentagemRelatorios >= 100 ? 'bg-green-500' : 'bg-blue-600'}`} style={{ width: `${Math.min(porcentagemRelatorios, 100)}%` }}></div>
-                    </div>
-                    <p className="text-xs text-gray-400 text-right">{porcentagemRelatorios}% coletado</p>
-                </Link>
-
-                <WrapperAssistencia
-                    to="/reunioes"
-                    className={`bg-white p-6 rounded-2xl shadow-sm border border-gray-200 transition duration-200 group ${isAdmin ? 'hover:shadow-md cursor-pointer' : 'cursor-default'}`}
-                >
-                    <div className="flex justify-between items-center mb-4">
-                        <p className={`text-sm font-medium text-gray-500 flex items-center gap-1 ${isAdmin ? 'group-hover:text-blue-600' : ''} transition-colors`}>
-                            Média Assistência ({nomeMesRelatorio})
-                            {isAdmin && <ArrowRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />}
-                        </p>
-                        <Calendar size={20} className={`text-gray-300 ${isAdmin ? 'group-hover:text-blue-600' : ''} transition-colors`} />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="text-center p-3 bg-orange-50 rounded-xl border border-orange-100"><span className="block text-2xl font-bold text-gray-800">{mediaAssistenciaMes.meio}</span><span className="text-[10px] uppercase font-bold text-orange-600">Vida e Min.</span></div>
-                        <div className="text-center p-3 bg-blue-50 rounded-xl border border-blue-100"><span className="block text-2xl font-bold text-gray-800">{mediaAssistenciaMes.fim}</span><span className="text-[10px] uppercase font-bold text-blue-600">Fim de Sem.</span></div>
-                    </div>
-                </WrapperAssistencia>
-            </div>
-
-            {/* SEÇÃO 2: TOTAIS E SITUAÇÃO */}
+            {/* SEÇÃO 2: TOTAIS E SITUAÇÃO (Agora é a primeira seção visível) */}
             <div className="bg-white rounded-2xl shadow-sm border border-gray-200 mb-8 overflow-hidden">
                 <Link to="/publicadores" className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50 hover:bg-gray-100 transition cursor-pointer group">
                     <h3 className="font-bold text-gray-700 flex items-center gap-2 group-hover:text-teocratico-blue"><Users size={18} /> Totais <ArrowRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity" /></h3>

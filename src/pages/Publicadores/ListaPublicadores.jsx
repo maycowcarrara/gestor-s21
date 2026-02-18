@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../../config/firebase';
-import { collection, query, orderBy, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
 import {
     Search, UserPlus, Users, ChevronRight, ChevronDown,
-    Briefcase, Shield, User, X, Filter, Baby, Glasses, UserCheck,
+    Briefcase, Shield, X, Filter, Baby, Glasses, UserCheck,
     Droplets, Printer, FileSpreadsheet, CheckCircle, LayoutGrid, List as ListIcon,
-    Globe, Accessibility, EyeOff
+    Globe, Accessibility, EyeOff, User
 } from 'lucide-react';
 import { calcularFaixaEtaria } from '../../utils/helpers';
 import { gerarPDFListaCompleta, gerarExcelListaCompleta } from '../../utils/geradorPDF';
@@ -45,9 +45,126 @@ export default function ListaPublicadores() {
     const [filtroGenero, setFiltroGenero] = useState("todos");
     const [filtroBatismo, setFiltroBatismo] = useState("todos");
 
+    // ------------------------- Helpers compatibilidade (schema novo + legado) -------------------------
+    const getNested = (obj, path) => {
+        try {
+            return path.split('.').reduce((acc, k) => (acc ? acc[k] : undefined), obj);
+        } catch {
+            return undefined;
+        }
+    };
+
+    const firstDefined = (obj, paths) => {
+        for (const p of paths) {
+            const v = p.includes('.') ? getNested(obj, p) : (obj ? obj[p] : undefined);
+            if (v !== undefined && v !== null && v !== '') return v;
+        }
+        return undefined;
+    };
+
+    const normalizarSituacao = (raw) => {
+        const s = String(raw ?? 'Ativo').trim().toLowerCase();
+        if (!s) return 'Ativo';
+
+        if (s === 'ativo') return 'Ativo';
+        if (s === 'irregular') return 'Irregular';
+        if (s === 'inativo') return 'Inativo';
+        if (s === 'removido') return 'Removido';
+
+        // compat: Excludo (legado), Excluido (sem acento), Excluído (correto)
+        if (s === 'excludo' || s === 'excluido' || s === 'excluído') return 'Excluído';
+
+        return 'Ativo';
+    };
+
+    const normalizarPrivilegios = (raw) => {
+        if (Array.isArray(raw)) return raw.filter(Boolean).map(x => String(x).trim()).filter(Boolean);
+        if (typeof raw === 'string') {
+            const t = raw.trim();
+            return t ? [t] : [];
+        }
+        return [];
+    };
+
+    // Converte doc legado -> formato que sua tela já espera (dados_pessoais / dados_eclesiasticos)
+    const normalizarPublicador = (raw, id) => {
+        const nome = firstDefined(raw, [
+            'dados_pessoais.nome_completo',
+            'dadospessoais.nomecompleto'
+        ]) || 'Sem nome';
+
+        const genero = firstDefined(raw, [
+            'dados_pessoais.genero',
+            'dadospessoais.genero'
+        ]) || 'Masculino';
+
+        const dataNascimento = firstDefined(raw, [
+            'dados_pessoais.data_nascimento',
+            'dadospessoais.datanascimento'
+        ]) || null;
+
+        const outraLingua = firstDefined(raw, [
+            'dados_pessoais.outra_lingua',
+            'dadospessoais.outralingua'
+        ]) || null;
+
+        const necessidadeEspecial = firstDefined(raw, [
+            'dados_pessoais.necessidade_especial',
+            'dadospessoais.necessidadeespecial'
+        ]) || null;
+
+        const situacaoRaw = firstDefined(raw, [
+            'dados_eclesiasticos.situacao',
+            'dadoseclesiasticos.situacao'
+        ]) || 'Ativo';
+
+        const grupoCampo = firstDefined(raw, [
+            'dados_eclesiasticos.grupo_campo',
+            'dadoseclesiasticos.grupocampo'
+        ]) || 'Sem Grupo';
+
+        const pioneiroTipo = firstDefined(raw, [
+            'dados_eclesiasticos.pioneiro_tipo',
+            'dadoseclesiasticos.pioneirotipo'
+        ]) || null;
+
+        const batizado = firstDefined(raw, [
+            'dados_eclesiasticos.batizado',
+            'dadoseclesiasticos.batizado'
+        ]);
+
+        const privRaw = firstDefined(raw, [
+            'dados_eclesiasticos.privilegios',
+            'dadoseclesiasticos.privilegios'
+        ]);
+
+        return {
+            id,
+            // mantém o bruto para debug se precisar
+            _raw: raw,
+
+            dados_pessoais: {
+                nome_completo: String(nome),
+                genero: genero ?? null,
+                data_nascimento: dataNascimento ?? null,
+                outra_lingua: outraLingua ?? null,
+                necessidade_especial: necessidadeEspecial ?? null
+            },
+
+            dados_eclesiasticos: {
+                situacao: normalizarSituacao(situacaoRaw),
+                grupo_campo: String(grupoCampo || 'Sem Grupo'),
+                pioneiro_tipo: pioneiroTipo ?? null,
+                batizado: !!batizado,
+                privilegios: normalizarPrivilegios(privRaw)
+            }
+        };
+    };
+
     useEffect(() => {
         carregarPublicadores();
         carregarConfigGrupos();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const carregarConfigGrupos = async () => {
@@ -63,13 +180,25 @@ export default function ListaPublicadores() {
     };
 
     const carregarPublicadores = async () => {
+        setLoading(true);
         try {
-            const q = query(collection(db, "publicadores"), orderBy("dados_pessoais.nome_completo"));
-            const querySnapshot = await getDocs(q);
-            const lista = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            // Caminho mais seguro: sem orderBy (evita dependência de schema/índice e quebra por campo inexistente)
+            const snap = await getDocs(collection(db, "publicadores"));
+
+            const lista = snap.docs.map(d => normalizarPublicador(d.data(), d.id));
+
+            // Ordenação segura no frontend (nome sempre existe após normalizar)
+            lista.sort((a, b) =>
+                (a.dados_pessoais.nome_completo || '').localeCompare(
+                    (b.dados_pessoais.nome_completo || ''),
+                    'pt-BR'
+                )
+            );
+
             setPublicadores(lista);
         } catch (error) {
             console.error("Erro ao buscar:", error);
+            setPublicadores([]);
         } finally {
             setLoading(false);
         }
@@ -84,41 +213,41 @@ export default function ListaPublicadores() {
 
     // --- LÓGICA DE FILTRAGEM ---
     const publicadoresFiltrados = publicadores.filter(pub => {
-        const situacao = pub.dados_eclesiasticos.situacao || "Ativo";
+        const situacao = pub?.dados_eclesiasticos?.situacao || "Ativo";
 
         // LÓGICA DO FILTRO DE SITUAÇÃO
         if (filtroSituacao === 'Geral') {
-            // "Todos" (Geral) = Mostra Ativos, Inativos, Removidos e Irregulares.
+            // "Geral" = Mostra Ativos, Inativos, Removidos e Irregulares.
             // ESCONDE Excluídos.
             if (situacao === 'Excluído') return false;
         } else {
-            // Se selecionou um filtro específico (ex: "Ativo", "Excluído"), respeita ele.
             if (situacao !== filtroSituacao) return false;
         }
 
-        if (busca && !pub.dados_pessoais.nome_completo.toLowerCase().includes(busca.toLowerCase())) return false;
+        const nome = (pub?.dados_pessoais?.nome_completo || '').toLowerCase();
+        if (busca && !nome.includes(busca.toLowerCase())) return false;
 
-        if (filtroGenero !== 'todos' && pub.dados_pessoais.genero !== filtroGenero) return false;
+        if (filtroGenero !== 'todos' && pub?.dados_pessoais?.genero !== filtroGenero) return false;
 
         if (filtroBatismo === 'nao_batizado') {
-            if (pub.dados_eclesiasticos.batizado) return false;
+            if (pub?.dados_eclesiasticos?.batizado) return false;
         }
 
         if (filtroTipo !== 'todos') {
-            const tipo = pub.dados_eclesiasticos.pioneiro_tipo;
+            const tipo = pub?.dados_eclesiasticos?.pioneiro_tipo;
             if (filtroTipo === 'publicador' && (tipo !== null && tipo !== 'Nenhum')) return false;
             if (filtroTipo === 'pioneiro_regular' && tipo !== 'Pioneiro Regular') return false;
         }
 
         if (filtroPrivilegio !== 'todos') {
-            const privs = pub.dados_eclesiasticos.privilegios || [];
+            const privs = pub?.dados_eclesiasticos?.privilegios || [];
             if (filtroPrivilegio === 'anciao' && !privs.includes('Ancião')) return false;
             if (filtroPrivilegio === 'servo' && !privs.includes('Servo Ministerial')) return false;
             if (filtroPrivilegio === 'varao' && !privs.includes('Varão Habilitado')) return false;
         }
 
         if (filtroFaixa !== 'todos') {
-            const faixa = calcularFaixaEtaria(pub.dados_pessoais.data_nascimento);
+            const faixa = calcularFaixaEtaria(pub?.dados_pessoais?.data_nascimento);
             if (!faixa) return false;
 
             const labelLower = faixa.label.toLowerCase();
@@ -129,14 +258,14 @@ export default function ListaPublicadores() {
         }
 
         if (filtroGrupo !== 'todos') {
-            if (pub.dados_eclesiasticos.grupo_campo !== filtroGrupo) return false;
+            if ((pub?.dados_eclesiasticos?.grupo_campo || 'Sem Grupo') !== filtroGrupo) return false;
         }
 
         return true;
     });
 
     const grupos = publicadoresFiltrados.reduce((acc, pub) => {
-        const grupo = pub.dados_eclesiasticos.grupo_campo || "Sem Grupo";
+        const grupo = pub?.dados_eclesiasticos?.grupo_campo || "Sem Grupo";
         if (!acc[grupo]) acc[grupo] = [];
         acc[grupo].push(pub);
         return acc;
@@ -176,7 +305,15 @@ export default function ListaPublicadores() {
         );
     };
 
-    const temFiltroAtivo = filtroTipo !== "todos" || filtroPrivilegio !== "todos" || filtroFaixa !== "todos" || filtroGrupo !== "todos" || filtroSituacao !== "Geral" || filtroGenero !== "todos" || filtroBatismo !== "todos" || busca !== "";
+    const temFiltroAtivo =
+        filtroTipo !== "todos" ||
+        filtroPrivilegio !== "todos" ||
+        filtroFaixa !== "todos" ||
+        filtroGrupo !== "todos" ||
+        filtroSituacao !== "Geral" ||
+        filtroGenero !== "todos" ||
+        filtroBatismo !== "todos" ||
+        busca !== "";
 
     // --- FUNÇÃO DE COR PARA GRUPO ---
     // Gera uma cor pastel baseada no nome do grupo (para consistência visual)
@@ -198,34 +335,46 @@ export default function ListaPublicadores() {
 
     // --- COMPONENTE INTERNO DO CARD (Reutilizável) ---
     const PublicadorCard = ({ pub }) => {
-        const faixaEtaria = calcularFaixaEtaria(pub.dados_pessoais.data_nascimento);
+        const faixaEtaria = calcularFaixaEtaria(pub?.dados_pessoais?.data_nascimento);
 
         // Verifica se tem etiquetas extras
-        const temOutraLingua = pub.dados_pessoais.outra_lingua && pub.dados_pessoais.outra_lingua !== "Não";
-        const temNecessidade = pub.dados_pessoais.necessidade_especial;
-        const genero = pub.dados_pessoais.genero;
+        const temOutraLingua = pub?.dados_pessoais?.outra_lingua && pub?.dados_pessoais?.outra_lingua !== "Não";
+        const temNecessidade = pub?.dados_pessoais?.necessidade_especial;
+        const genero = pub?.dados_pessoais?.genero;
 
         // Fundo sutil baseado no gênero
-        const bgGenero = genero === 'Masculino' ? 'bg-blue-50/30 hover:bg-blue-50/80 border-blue-100/50' : 'bg-pink-50/30 hover:bg-pink-50/80 border-pink-100/50';
+        const bgGenero = genero === 'Masculino'
+            ? 'bg-blue-50/30 hover:bg-blue-50/80 border-blue-100/50'
+            : 'bg-pink-50/30 hover:bg-pink-50/80 border-pink-100/50';
 
         return (
-            <Link to={`/publicadores/${pub.id}`} className={`block rounded-lg border transition-all p-3 group h-full ${bgGenero} ${modoVisualizacao === 'lista' ? 'flex items-center justify-between' : 'flex flex-col'}`}>
-
+            <Link
+                to={`/publicadores/${pub.id}`}
+                className={`block rounded-lg border transition-all p-3 group h-full ${bgGenero} ${modoVisualizacao === 'lista' ? 'flex items-center justify-between' : 'flex flex-col'}`}
+            >
                 <div className={`flex items-center gap-3 w-full ${modoVisualizacao === 'grade' ? 'mb-3' : ''}`}>
                     {/* Avatar */}
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-sm shrink-0 
-                        ${genero === 'Masculino' ? 'bg-teocratico-blue' : 'bg-pink-400'}`}>
-                        {pub.dados_pessoais.nome_completo.charAt(0)}
+                    <div
+                        className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-sm shrink-0 
+                            ${genero === 'Masculino' ? 'bg-teocratico-blue' : 'bg-pink-400'}`}
+                    >
+                        {(pub?.dados_pessoais?.nome_completo || 'S').charAt(0)}
                     </div>
 
                     <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-0.5">
                             <p className="font-bold text-gray-800 text-sm truncate group-hover:text-blue-700 transition-colors">
-                                {pub.dados_pessoais.nome_completo}
+                                {pub?.dados_pessoais?.nome_completo || 'Sem nome'}
                             </p>
-                            {pub.dados_eclesiasticos.situacao !== 'Ativo' && (
-                                <span className={`text-[10px] px-1.5 rounded border font-bold shrink-0 ${pub.dados_eclesiasticos.situacao === 'Inativo' ? 'bg-orange-50 text-orange-600 border-orange-100' : 'bg-red-50 text-red-600 border-red-100'}`}>
-                                    {pub.dados_eclesiasticos.situacao}
+
+                            {pub?.dados_eclesiasticos?.situacao !== 'Ativo' && (
+                                <span
+                                    className={`text-[10px] px-1.5 rounded border font-bold shrink-0 ${pub?.dados_eclesiasticos?.situacao === 'Inativo'
+                                            ? 'bg-orange-50 text-orange-600 border-orange-100'
+                                            : 'bg-red-50 text-red-600 border-red-100'
+                                        }`}
+                                >
+                                    {pub?.dados_eclesiasticos?.situacao}
                                 </span>
                             )}
                         </div>
@@ -233,12 +382,19 @@ export default function ListaPublicadores() {
                         {/* Etiquetas de Acessibilidade / Idioma */}
                         <div className="flex gap-1.5">
                             {temOutraLingua && (
-                                <span title={`Outra Língua: ${pub.dados_pessoais.outra_lingua}`} className="bg-purple-50 text-purple-600 p-0.5 rounded text-[10px] flex items-center gap-1 border border-purple-100 px-1.5">
-                                    <Globe size={10} /> <span className="hidden sm:inline truncate max-w-[60px]">{pub.dados_pessoais.outra_lingua}</span>
+                                <span
+                                    title={`Outra Língua: ${pub?.dados_pessoais?.outra_lingua}`}
+                                    className="bg-purple-50 text-purple-600 p-0.5 rounded text-[10px] flex items-center gap-1 border border-purple-100 px-1.5"
+                                >
+                                    <Globe size={10} /> <span className="hidden sm:inline truncate max-w-[60px]">{pub?.dados_pessoais?.outra_lingua}</span>
                                 </span>
                             )}
+
                             {temNecessidade && (
-                                <span title="Necessidade Especial" className="bg-yellow-50 text-yellow-600 p-0.5 rounded border border-yellow-100">
+                                <span
+                                    title="Necessidade Especial"
+                                    className="bg-yellow-50 text-yellow-600 p-0.5 rounded border border-yellow-100"
+                                >
                                     <Accessibility size={12} />
                                 </span>
                             )}
@@ -254,13 +410,13 @@ export default function ListaPublicadores() {
                         </span>
                     )}
 
-                    {!pub.dados_eclesiasticos.batizado && (
+                    {!pub?.dados_eclesiasticos?.batizado && (
                         <span className="text-[10px] bg-cyan-50 text-cyan-700 px-1.5 py-0.5 rounded border border-cyan-100 font-medium flex items-center gap-1">
                             <Droplets size={8} /> <span className="hidden sm:inline">Não Batizado</span>
                         </span>
                     )}
 
-                    {pub.dados_eclesiasticos.privilegios?.map(priv => {
+                    {(pub?.dados_eclesiasticos?.privilegios || []).map(priv => {
                         let styleClass = "bg-indigo-50 text-indigo-700 border-indigo-100";
                         let Icon = Shield;
                         let label = priv;
@@ -284,9 +440,9 @@ export default function ListaPublicadores() {
                         );
                     })}
 
-                    {pub.dados_eclesiasticos.pioneiro_tipo && (
+                    {pub?.dados_eclesiasticos?.pioneiro_tipo && (
                         <span className="text-[10px] bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded border border-yellow-100 font-medium truncate max-w-[100px]">
-                            {pub.dados_eclesiasticos.pioneiro_tipo === "Pioneiro Regular" ? "Pioneiro Reg." : pub.dados_eclesiasticos.pioneiro_tipo}
+                            {pub?.dados_eclesiasticos?.pioneiro_tipo === "Pioneiro Regular" ? "Pioneiro Reg." : pub?.dados_eclesiasticos?.pioneiro_tipo}
                         </span>
                     )}
                 </div>
@@ -329,20 +485,34 @@ export default function ListaPublicadores() {
                     </div>
 
                     <div className="flex gap-2 mr-0 md:mr-2 border-r border-gray-200 pr-0 md:pr-4">
-                        <button onClick={() => gerarPDFListaCompleta(publicadoresFiltrados)} className="bg-white border border-gray-300 w-10 h-10 rounded-lg text-gray-700 flex items-center justify-center hover:bg-gray-50 transition shadow-sm" title="Imprimir PDF">
+                        <button
+                            onClick={() => gerarPDFListaCompleta(publicadoresFiltrados)}
+                            className="bg-white border border-gray-300 w-10 h-10 rounded-lg text-gray-700 flex items-center justify-center hover:bg-gray-50 transition shadow-sm"
+                            title="Imprimir PDF"
+                        >
                             <Printer size={18} className="text-red-600" />
                         </button>
-                        <button onClick={() => gerarExcelListaCompleta(publicadoresFiltrados)} className="bg-white border border-gray-300 w-10 h-10 rounded-lg text-gray-700 flex items-center justify-center hover:bg-gray-50 transition shadow-sm" title="Baixar Excel">
+                        <button
+                            onClick={() => gerarExcelListaCompleta(publicadoresFiltrados)}
+                            className="bg-white border border-gray-300 w-10 h-10 rounded-lg text-gray-700 flex items-center justify-center hover:bg-gray-50 transition shadow-sm"
+                            title="Baixar Excel"
+                        >
                             <FileSpreadsheet size={18} className="text-green-600" />
                         </button>
                     </div>
 
-                    <button onClick={() => setMostrarFiltros(!mostrarFiltros)} className="md:hidden bg-white border border-gray-300 px-3 py-2 rounded-lg text-gray-700 flex items-center gap-2 font-medium text-sm">
+                    <button
+                        onClick={() => setMostrarFiltros(!mostrarFiltros)}
+                        className="md:hidden bg-white border border-gray-300 px-3 py-2 rounded-lg text-gray-700 flex items-center gap-2 font-medium text-sm"
+                    >
                         <Filter size={16} /> Filtros
                     </button>
 
                     {isAdmin && (
-                        <Link to="/publicadores/novo" className="bg-teocratico-blue text-white px-5 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 transition shadow-sm w-full md:w-auto justify-center font-bold text-sm">
+                        <Link
+                            to="/publicadores/novo"
+                            className="bg-teocratico-blue text-white px-5 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 transition shadow-sm w-full md:w-auto justify-center font-bold text-sm"
+                        >
                             <UserPlus size={18} /> Novo
                         </Link>
                     )}
@@ -355,11 +525,21 @@ export default function ListaPublicadores() {
                 <div className="flex flex-col md:flex-row gap-4 mb-4">
                     <div className="relative flex-1">
                         <Search className="absolute left-3 top-3 text-gray-400 w-5 h-5" />
-                        <input type="text" placeholder="Buscar nome..." value={busca} onChange={(e) => setBusca(e.target.value)} className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-200 outline-none text-sm" />
+                        <input
+                            type="text"
+                            placeholder="Buscar nome..."
+                            value={busca}
+                            onChange={(e) => setBusca(e.target.value)}
+                            className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-200 outline-none text-sm"
+                        />
                     </div>
+
                     <div className="bg-white p-1 rounded-lg border border-gray-200 flex shrink-0 overflow-x-auto items-center">
                         {/* BOTÃO "GERAL" (TODOS MENOS EXCLUÍDOS) */}
-                        <button onClick={() => setFiltroSituacao('Geral')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1 ${filtroSituacao === 'Geral' ? 'bg-gray-800 text-white shadow-sm ring-1 ring-gray-900' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>
+                        <button
+                            onClick={() => setFiltroSituacao('Geral')}
+                            className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1 ${filtroSituacao === 'Geral' ? 'bg-gray-800 text-white shadow-sm ring-1 ring-gray-900' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+                        >
                             <Users size={12} /> Geral
                         </button>
 
@@ -370,8 +550,13 @@ export default function ListaPublicadores() {
                             if (sit === 'Ativo') activeClass = 'bg-green-100 text-green-700 shadow-sm ring-1 ring-green-200';
                             else if (sit === 'Inativo') activeClass = 'bg-orange-100 text-orange-700 shadow-sm ring-1 ring-orange-200';
                             else if (sit === 'Removido') activeClass = 'bg-red-100 text-red-700 shadow-sm ring-1 ring-red-200';
+
                             return (
-                                <button key={sit} onClick={() => setFiltroSituacao(sit)} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all whitespace-nowrap ml-1 ${filtroSituacao === sit ? activeClass : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'}`}>
+                                <button
+                                    key={sit}
+                                    onClick={() => setFiltroSituacao(sit)}
+                                    className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all whitespace-nowrap ml-1 ${filtroSituacao === sit ? activeClass : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'}`}
+                                >
                                     {sit}
                                 </button>
                             );
@@ -379,41 +564,133 @@ export default function ListaPublicadores() {
 
                         {/* EXCLUÍDO SEPARADO/APAGADO */}
                         <div className="w-px h-4 bg-gray-200 mx-1"></div>
-                        <button onClick={() => setFiltroSituacao('Excluído')} className={`px-3 py-1.5 rounded-md text-[10px] font-bold transition-all whitespace-nowrap flex items-center gap-1 ml-1 ${filtroSituacao === 'Excluído' ? 'bg-gray-600 text-white' : 'text-gray-300 hover:text-red-400'}`}>
+                        <button
+                            onClick={() => setFiltroSituacao('Excluído')}
+                            className={`px-3 py-1.5 rounded-md text-[10px] font-bold transition-all whitespace-nowrap flex items-center gap-1 ml-1 ${filtroSituacao === 'Excluído' ? 'bg-gray-600 text-white' : 'text-gray-300 hover:text-red-400'}`}
+                        >
                             <EyeOff size={10} /> Excluídos
                         </button>
                     </div>
                 </div>
+
                 <div className="border-t border-gray-200 mb-4"></div>
+
                 {/* LINHA 2: TEOCRÁTICO */}
                 <div className="flex flex-col gap-3">
                     <div className="flex flex-wrap gap-2 items-center">
                         <span className="text-[10px] font-bold text-gray-400 uppercase mr-1 w-16">Teocrático:</span>
-                        <select value={filtroGrupo} onChange={(e) => setFiltroGrupo(e.target.value)} className={`text-xs font-bold py-1.5 px-3 rounded-lg border cursor-pointer outline-none transition ${filtroGrupo !== 'todos' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-100'}`}>
+
+                        <select
+                            value={filtroGrupo}
+                            onChange={(e) => setFiltroGrupo(e.target.value)}
+                            className={`text-xs font-bold py-1.5 px-3 rounded-lg border cursor-pointer outline-none transition ${filtroGrupo !== 'todos' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-100'}`}
+                        >
                             <option value="todos">Todos os Grupos</option>
                             {listaGrupos.map((g, index) => {
                                 const nomeGrupo = typeof g === 'object' ? g.nome : g;
                                 return <option key={index} value={nomeGrupo}>{nomeGrupo}</option>;
                             })}
                         </select>
+
                         <div className="w-px h-5 bg-gray-300 mx-1"></div>
-                        <TagFilter label="Pioneiro Regular" icon={Briefcase} active={filtroTipo === 'pioneiro_regular'} onClick={() => setFiltroTipo(filtroTipo === 'pioneiro_regular' ? 'todos' : 'pioneiro_regular')} color="blue" />
-                        <TagFilter label="Ancião" icon={Shield} active={filtroPrivilegio === 'anciao'} onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'anciao' ? 'todos' : 'anciao')} color="indigo" />
-                        <TagFilter label="Servo Min." icon={Shield} active={filtroPrivilegio === 'servo'} onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'servo' ? 'todos' : 'servo')} color="indigo" />
-                        <TagFilter label="Varão Hab." icon={CheckCircle} active={filtroPrivilegio === 'varao'} onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'varao' ? 'todos' : 'varao')} color="green" />
+
+                        <TagFilter
+                            label="Pioneiro Regular"
+                            icon={Briefcase}
+                            active={filtroTipo === 'pioneiro_regular'}
+                            onClick={() => setFiltroTipo(filtroTipo === 'pioneiro_regular' ? 'todos' : 'pioneiro_regular')}
+                            color="blue"
+                        />
+
+                        <TagFilter
+                            label="Ancião"
+                            icon={Shield}
+                            active={filtroPrivilegio === 'anciao'}
+                            onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'anciao' ? 'todos' : 'anciao')}
+                            color="indigo"
+                        />
+
+                        <TagFilter
+                            label="Servo Min."
+                            icon={Shield}
+                            active={filtroPrivilegio === 'servo'}
+                            onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'servo' ? 'todos' : 'servo')}
+                            color="indigo"
+                        />
+
+                        <TagFilter
+                            label="Varão Hab."
+                            icon={CheckCircle}
+                            active={filtroPrivilegio === 'varao'}
+                            onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'varao' ? 'todos' : 'varao')}
+                            color="green"
+                        />
                     </div>
+
                     {/* LINHA 3: PERFIL */}
                     <div className="flex flex-wrap gap-2 items-center border-t border-gray-100 pt-2 md:pt-0 md:border-0">
                         <span className="text-[10px] font-bold text-gray-400 uppercase mr-1 w-16">Perfil:</span>
-                        <TagFilter label="Homem" icon={User} active={filtroGenero === 'Masculino'} onClick={() => setFiltroGenero(filtroGenero === 'Masculino' ? 'todos' : 'Masculino')} color="cyan" />
-                        <TagFilter label="Mulher" icon={User} active={filtroGenero === 'Feminino'} onClick={() => setFiltroGenero(filtroGenero === 'Feminino' ? 'todos' : 'Feminino')} color="pink" />
+
+                        <TagFilter
+                            label="Homem"
+                            icon={User}
+                            active={filtroGenero === 'Masculino'}
+                            onClick={() => setFiltroGenero(filtroGenero === 'Masculino' ? 'todos' : 'Masculino')}
+                            color="cyan"
+                        />
+
+                        <TagFilter
+                            label="Mulher"
+                            icon={User}
+                            active={filtroGenero === 'Feminino'}
+                            onClick={() => setFiltroGenero(filtroGenero === 'Feminino' ? 'todos' : 'Feminino')}
+                            color="pink"
+                        />
+
                         <div className="w-px h-5 bg-gray-300 mx-1"></div>
-                        <TagFilter label="Não Batizado" icon={Droplets} active={filtroBatismo === 'nao_batizado'} onClick={() => setFiltroBatismo(filtroBatismo === 'nao_batizado' ? 'todos' : 'nao_batizado')} color="cyan" />
+
+                        <TagFilter
+                            label="Não Batizado"
+                            icon={Droplets}
+                            active={filtroBatismo === 'nao_batizado'}
+                            onClick={() => setFiltroBatismo(filtroBatismo === 'nao_batizado' ? 'todos' : 'nao_batizado')}
+                            color="cyan"
+                        />
+
                         <div className="w-px h-5 bg-gray-300 mx-1"></div>
-                        <TagFilter label="Criança" icon={Baby} active={filtroFaixa === 'crianca'} onClick={() => setFiltroFaixa(filtroFaixa === 'crianca' ? 'todos' : 'crianca')} color="pink" />
-                        <TagFilter label="Jovem" icon={UserCheck} active={filtroFaixa === 'jovem'} onClick={() => setFiltroFaixa(filtroFaixa === 'jovem' ? 'todos' : 'jovem')} color="purple" />
-                        <TagFilter label="Adulto" icon={User} active={filtroFaixa === 'adulto'} onClick={() => setFiltroFaixa(filtroFaixa === 'adulto' ? 'todos' : 'adulto')} color="blue" />
-                        <TagFilter label="Idoso" icon={Glasses} active={filtroFaixa === 'idoso'} onClick={() => setFiltroFaixa(filtroFaixa === 'idoso' ? 'todos' : 'idoso')} color="orange" />
+
+                        <TagFilter
+                            label="Criança"
+                            icon={Baby}
+                            active={filtroFaixa === 'crianca'}
+                            onClick={() => setFiltroFaixa(filtroFaixa === 'crianca' ? 'todos' : 'crianca')}
+                            color="pink"
+                        />
+
+                        <TagFilter
+                            label="Jovem"
+                            icon={UserCheck}
+                            active={filtroFaixa === 'jovem'}
+                            onClick={() => setFiltroFaixa(filtroFaixa === 'jovem' ? 'todos' : 'jovem')}
+                            color="purple"
+                        />
+
+                        <TagFilter
+                            label="Adulto"
+                            icon={User}
+                            active={filtroFaixa === 'adulto'}
+                            onClick={() => setFiltroFaixa(filtroFaixa === 'adulto' ? 'todos' : 'adulto')}
+                            color="blue"
+                        />
+
+                        <TagFilter
+                            label="Idoso"
+                            icon={Glasses}
+                            active={filtroFaixa === 'idoso'}
+                            onClick={() => setFiltroFaixa(filtroFaixa === 'idoso' ? 'todos' : 'idoso')}
+                            color="orange"
+                        />
+
                         {temFiltroAtivo && (
                             <button onClick={limparFiltros} className="ml-auto flex items-center gap-1 text-xs font-bold text-red-600 hover:text-red-800 hover:underline px-2">
                                 <X size={14} /> Limpar
@@ -441,7 +718,10 @@ export default function ListaPublicadores() {
                         return (
                             <div key={grupo} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden animate-fadeIn">
                                 {/* CABEÇALHO DO GRUPO */}
-                                <div onClick={() => toggleGrupo(grupo)} className={`${groupHeaderClass} px-4 py-3 border-b border-gray-100 flex justify-between items-center cursor-pointer transition select-none`}>
+                                <div
+                                    onClick={() => toggleGrupo(grupo)}
+                                    className={`${groupHeaderClass} px-4 py-3 border-b border-gray-100 flex justify-between items-center cursor-pointer transition select-none`}
+                                >
                                     <div className="flex items-center gap-2">
                                         {isExpanded ? <ChevronDown size={18} className="opacity-70" /> : <ChevronRight size={18} className="opacity-70" />}
                                         <h3 className="font-bold">{grupo}</h3>
