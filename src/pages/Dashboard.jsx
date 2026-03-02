@@ -11,7 +11,6 @@ import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, AreaChart, Area
 } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
-import BarraSincronizacao from '../components/BarraSincronizacao';
 
 // --- CORES DO SISTEMA ---
 const COLORS_SITUACAO = {
@@ -24,7 +23,6 @@ const COLORS_SITUACAO = {
 const COLORS_FAIXA = ['#38BDF8', '#818CF8', '#6366F1', '#4F46E5'];
 const COLORS_ESTUDOS = { pub: '#9CA3AF', aux: '#F59E0B', reg: '#10B981' };
 
-// Componente para Labels Personalizadas nos Gráficos
 const CustomBarLabel = (props) => {
     const { x, y, width, height, index, pKey, data } = props;
     if (!height || height === 0) return null;
@@ -41,24 +39,16 @@ const CustomBarLabel = (props) => {
 export default function Dashboard() {
     const { isAdmin } = useAuth();
 
-    // Estados para armazenar estatísticas
     const [stats, setStats] = useState({
         totalGeral: 0, totalAtivosInativos: 0, ativos: 0, irregulares: 0,
         inativos: 0, removidos: 0, excluidos: 0, pioneirosRegulares: 0, anciaos: 0,
         servos: 0, varoes: 0, naoBatizados: 0
     });
 
-    // Estados para gráficos
     const [dadosGrupos, setDadosGrupos] = useState([]);
     const [dadosFaixaEtaria, setDadosFaixaEtaria] = useState([]);
     const [dadosEstudos, setDadosEstudos] = useState([]);
     const [dadosAssistencia, setDadosAssistencia] = useState([]);
-
-    // Estados de totais (Mantidos para cálculos internos, mesmo sem os cards)
-    const [relatoriosColetados, setRelatoriosColetados] = useState(0);
-    const [totalEsperadoRelatorios, setTotalEsperadoRelatorios] = useState(0);
-    const [nomeMesRelatorio, setNomeMesRelatorio] = useState("");
-    const [mediaAssistenciaMes, setMediaAssistenciaMes] = useState({ meio: 0, fim: 0 });
 
     const [loading, setLoading] = useState(true);
     const [isMounted, setIsMounted] = useState(false);
@@ -71,31 +61,11 @@ export default function Dashboard() {
     const carregarTudo = async () => {
         try {
             const hoje = new Date();
-
-            // 1. DEFINIR DATA DE REFERÊNCIA (MÊS ANTERIOR AO ATUAL)
             const dataMesReferencia = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
             const anoRef = dataMesReferencia.getFullYear();
             const mesRef = dataMesReferencia.getMonth() + 1;
 
-            const mesRelatorioIso = `${anoRef}-${String(mesRef).padStart(2, '0')}`; // Formato YYYY-MM
-            setNomeMesRelatorio(dataMesReferencia.toLocaleDateString('pt-BR', { month: 'long' }));
-
-            // 2. BUSCAR RELATÓRIOS DO MÊS DE REFERÊNCIA PRIMEIRO
-            const qRels = query(collection(db, "relatorios"), where("mes_referencia", "==", mesRelatorioIso));
-            const snapRels = await getDocs(qRels);
-
-            const mapaRelatoriosMes = {}; // ID -> Dados do Relatório
-            const idsQueRelataram = new Set(); // Apenas IDs únicos
-
-            snapRels.forEach(doc => {
-                const d = doc.data();
-                mapaRelatoriosMes[d.id_publicador] = d;
-                idsQueRelataram.add(d.id_publicador);
-            });
-
-            setRelatoriosColetados(idsQueRelataram.size);
-
-            // 3. BUSCAR E PROCESSAR PUBLICADORES
+            // 1. BUSCAR PUBLICADORES (Única leitura massiva do painel)
             const qPubs = query(collection(db, "publicadores"));
             const snapPubs = await getDocs(qPubs);
 
@@ -108,64 +78,30 @@ export default function Dashboard() {
             const contagemGrupos = {};
             const contagemFaixa = { 'Crianças': 0, 'Jovens': 0, 'Adultos': 0, 'Idosos': 0 };
 
-            const idsConsideradosValidos = new Set();
-            const dataFimMesReferencia = new Date(anoRef, mesRef, 0, 23, 59, 59);
-
-            const parseData = (dataStr) => {
-                if (!dataStr) return null;
-                if (dataStr.includes('/')) {
-                    const partes = dataStr.split('/');
-                    if (partes.length === 3) return new Date(`${partes[2]}-${partes[1]}-${partes[0]}T12:00:00`);
-                }
-                if (dataStr.includes('-')) return new Date(dataStr + "T12:00:00");
-                return new Date(dataStr);
-            };
-
             snapPubs.forEach((doc) => {
                 const data = doc.data();
-                const id = doc.id;
+                
+                // Lê o status que já foi gravado pelo script (Sem refazer cálculos)
                 let sit = data.dados_eclesiasticos?.situacao || "Ativo";
-
-                const entregouRelatorio = idsQueRelataram.has(id);
-
-                if (entregouRelatorio) {
-                    if (['Excluído', 'Removido', 'Inativo'].includes(sit)) {
-                        sit = 'Ativo';
-                    }
-                }
-
-                const dataInicioStr = data.dados_eclesiasticos?.data_inicio || data.dados_eclesiasticos?.data_batismo;
-
-                if (!entregouRelatorio && dataInicioStr) {
-                    const dataInicio = parseData(dataInicioStr);
-                    if (dataInicio && !isNaN(dataInicio.getTime())) {
-                        if (dataInicio > dataFimMesReferencia) return;
-                    }
-                }
-
-                idsConsideradosValidos.add(id);
+                let reg = data.dados_eclesiasticos?.regularidade || "Regular"; 
 
                 if (sit === 'Excluído') {
                     novosStats.excluidos++;
-                } else if (sit === 'Removido') {
+                } else if (sit === 'Removido' || sit === 'Mudou-se') {
                     novosStats.removidos++;
                 } else {
                     novosStats.totalAtivosInativos++;
 
-                    if (sit === 'Ativo') novosStats.ativos++;
-                    else if (sit === 'Irregular') novosStats.irregulares++;
-                    else if (sit === 'Inativo') novosStats.inativos++;
+                    if (sit === 'Inativo') novosStats.inativos++;
+                    else if (sit === 'Irregular' || reg === 'Irregular') novosStats.irregulares++;
+                    else novosStats.ativos++;
 
                     const privs = data.dados_eclesiasticos?.privilegios || [];
                     if (privs.includes('Ancião')) novosStats.anciaos++;
                     if (privs.includes('Servo Ministerial')) novosStats.servos++;
                     if (privs.includes('Varão Habilitado')) novosStats.varoes++;
 
-                    let tipoPioneiro = data.dados_eclesiasticos?.pioneiro_tipo;
-                    if (entregouRelatorio && mapaRelatoriosMes[id]?.atividade?.tipo_pioneiro_mes) {
-                        tipoPioneiro = mapaRelatoriosMes[id].atividade.tipo_pioneiro_mes;
-                    }
-
+                    const tipoPioneiro = data.dados_eclesiasticos?.pioneiro_tipo;
                     if (['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tipoPioneiro)) {
                         novosStats.pioneirosRegulares++;
                     }
@@ -176,8 +112,16 @@ export default function Dashboard() {
                     contagemGrupos[grupo] = (contagemGrupos[grupo] || 0) + 1;
 
                     if (data.dados_pessoais?.data_nascimento) {
-                        const dataNasc = parseData(data.dados_pessoais.data_nascimento);
-                        if (dataNasc) {
+                        const dataNascStr = data.dados_pessoais.data_nascimento;
+                        let dataNasc = null;
+                        if (dataNascStr.includes('/')) {
+                            const partes = dataNascStr.split('/');
+                            if (partes.length === 3) dataNasc = new Date(`${partes[2]}-${partes[1]}-${partes[0]}T12:00:00`);
+                        } else {
+                            dataNasc = new Date(dataNascStr + "T12:00:00");
+                        }
+
+                        if (dataNasc && !isNaN(dataNasc.getTime())) {
                             let idade = hoje.getFullYear() - dataNasc.getFullYear();
                             const m = hoje.getMonth() - dataNasc.getMonth();
                             if (m < 0 || (m === 0 && hoje.getDate() < dataNasc.getDate())) idade--;
@@ -192,8 +136,6 @@ export default function Dashboard() {
             });
 
             setStats(novosStats);
-            setTotalEsperadoRelatorios(novosStats.ativos + novosStats.irregulares);
-
             setDadosGrupos(Object.keys(contagemGrupos).map(g => ({ name: g, qtd: contagemGrupos[g] })));
             setDadosFaixaEtaria([
                 { name: 'Crianças (<13)', value: contagemFaixa['Crianças'] },
@@ -202,13 +144,11 @@ export default function Dashboard() {
                 { name: 'Idosos (60+)', value: contagemFaixa['Idosos'] }
             ]);
 
-            // 4. HISTÓRICO DE ASSISTÊNCIA
+            // 2. HISTÓRICO DE ASSISTÊNCIA
             const dataSeisMesesAtras = new Date(anoRef, mesRef - 6, 1);
             const isoSeisMeses = dataSeisMesesAtras.toISOString().slice(0, 10);
-
             const qAssist = query(collection(db, "assistencia"), where("data", ">=", isoSeisMeses));
             const snapAssist = await getDocs(qAssist);
-
             const assistenciaMap = {};
 
             snapAssist.forEach(doc => {
@@ -229,24 +169,11 @@ export default function Dashboard() {
                 const mediaMeio = arrMeio.length ? Math.round(arrMeio.reduce((a, b) => a + b, 0) / arrMeio.length) : 0;
                 const mediaFim = arrFim.length ? Math.round(arrFim.reduce((a, b) => a + b, 0) / arrFim.length) : 0;
                 const [ano, m] = mes.split('-');
-                return {
-                    mesLabel: `${m}/${ano.slice(2)}`,
-                    meio: mediaMeio,
-                    fim: mediaFim,
-                    mesSort: mes
-                };
+                return { mesLabel: `${m}/${ano.slice(2)}`, meio: mediaMeio, fim: mediaFim, mesSort: mes };
             });
-
             setDadosAssistencia(dadosGraficoAssistencia);
 
-            // Média do Mês de Referência
-            const dadosMesRef = assistenciaMap[mesRelatorioIso] || { meio: [], fim: [] };
-            const mediaMeioRef = dadosMesRef.meio.length ? Math.round(dadosMesRef.meio.reduce((a, b) => a + b, 0) / dadosMesRef.meio.length) : 0;
-            const mediaFimRef = dadosMesRef.fim.length ? Math.round(dadosMesRef.fim.reduce((a, b) => a + b, 0) / dadosMesRef.fim.length) : 0;
-
-            setMediaAssistenciaMes({ meio: mediaMeioRef, fim: mediaFimRef });
-
-            // 5. GRÁFICO DE ESTUDOS
+            // 3. GRÁFICO DE ESTUDOS (Agora lendo da tabela de estatísticas otimizada)
             const mesesUltimos12 = [];
             for (let i = 11; i >= 0; i--) {
                 const d = new Date(anoRef, mesRef - 1 - i, 1);
@@ -258,32 +185,32 @@ export default function Dashboard() {
             const startIso = mesesUltimos12[0].iso;
             const endIso = mesesUltimos12[11].iso;
 
-            const qEstudos = query(collection(db, "relatorios"), where("mes_referencia", ">=", startIso), where("mes_referencia", "<=", endIso));
+            const qEstudos = query(
+                collection(db, "estatisticas_s1"), 
+                where("mes", ">=", startIso), 
+                where("mes", "<=", endIso)
+            );
             const snapEstudos = await getDocs(qEstudos);
 
             snapEstudos.forEach(doc => {
                 const d = doc.data();
-                if (!idsConsideradosValidos.has(d.id_publicador)) return;
-
-                const mes = d.mes_referencia;
-                const estudos = Number(d.atividade?.estudos || 0);
-                if (estudos > 0) {
-                    const bucket = mesesUltimos12.find(m => m.iso === mes);
-                    if (bucket) {
-                        const tipoBase = d.atividade?.tipo_pioneiro_mes || 'Publicador';
-                        const isAux = d.atividade?.pioneiro_auxiliar_mes === true || tipoBase === 'Pioneiro Auxiliar';
-                        const isReg = ['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tipoBase);
-                        if (isReg) bucket.reg += estudos; else if (isAux) bucket.aux += estudos; else bucket.pub += estudos;
-                    }
+                const bucket = mesesUltimos12.find(m => m.iso === d.mes);
+                if (bucket) {
+                    bucket.pub = Number(d.pubs?.estudos || 0);
+                    bucket.aux = Number(d.aux?.estudos || 0);
+                    bucket.reg = Number(d.reg?.estudos || 0);
                 }
             });
+            
             setDadosEstudos(mesesUltimos12);
 
-        } catch (error) { console.error("Erro dashboard:", error); }
-        finally { setLoading(false); }
+        } catch (error) { 
+            console.error("Erro dashboard:", error); 
+        } finally { 
+            setLoading(false); 
+        }
     };
 
-    // Dados para o Gráfico de Pizza
     const dataSituacao = [
         { name: 'Ativos', value: stats.ativos, color: COLORS_SITUACAO['Ativos'] },
         { name: 'Irregulares', value: stats.irregulares, color: COLORS_SITUACAO['Irregulares'] },
@@ -295,13 +222,11 @@ export default function Dashboard() {
 
     return (
         <div className="p-4 md:p-8 max-w-7xl mx-auto pb-24">
-            <BarraSincronizacao />
             <div className="mb-8">
                 <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><TrendingUp className="text-teocratico-blue" /> Painel de Controle</h1>
                 <p className="text-sm text-gray-500 mt-1">Visão geral e indicadores da congregação.</p>
             </div>
 
-            {/* SEÇÃO 2: TOTAIS E SITUAÇÃO (Agora é a primeira seção visível) */}
             <div className="bg-white rounded-2xl shadow-sm border border-gray-200 mb-8 overflow-hidden">
                 <Link to="/publicadores" className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50 hover:bg-gray-100 transition cursor-pointer group">
                     <h3 className="font-bold text-gray-700 flex items-center gap-2 group-hover:text-teocratico-blue"><Users size={18} /> Totais <ArrowRight size={16} className="opacity-0 group-hover:opacity-100 transition-opacity" /></h3>
@@ -344,7 +269,6 @@ export default function Dashboard() {
                                 </ResponsiveContainer>
                             )}
                         </div>
-                        {/* ALERTAS */}
                         <div className="w-full mt-2 text-center space-y-1">
                             {stats.removidos > 0 && <div className="text-[10px] text-gray-500 font-medium">Removidos: <strong>{stats.removidos}</strong></div>}
                             {stats.excluidos > 0 && <div className="text-[10px] text-gray-400">Excluídos (mudança): {stats.excluidos}</div>}
@@ -353,10 +277,7 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            {/* SEÇÃO 3: GRÁFICOS */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-
-                {/* 3.1: HISTÓRICO DE ASSISTÊNCIA */}
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
                     <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
                         <Calendar size={18} className="text-blue-600" /> Histórico de Assistência (Média)
@@ -392,7 +313,6 @@ export default function Dashboard() {
                     </div>
                 </div>
 
-                {/* 3.2: ESTUDOS BÍBLICOS */}
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
                     <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
                         <BookOpen size={18} className="text-green-600" /> Evolução de Estudos
@@ -415,7 +335,6 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            {/* SEÇÃO 4: GRUPOS E IDADE */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
                     <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><Users2 size={18} /> Por Grupo de Campo</h3>
@@ -452,7 +371,6 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            {/* AVISOS E BOTÕES DE AÇÃO */}
             {stats.irregulares > 0 ? (
                 <div className="bg-red-50 p-4 rounded-xl border border-red-100 flex items-center gap-4 mb-8">
                     <AlertCircle className="text-red-600 shrink-0" size={24} />

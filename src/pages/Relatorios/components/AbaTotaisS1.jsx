@@ -1,22 +1,63 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Calendar, Users, Calculator, RefreshCw, History, FileText, Info, X, HelpCircle, AlertTriangle, Copy } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { db } from '../../../config/firebase';
-import { collection, getDocs, writeBatch, query, where, doc } from 'firebase/firestore';
+import { collection, getDocs, writeBatch, query, serverTimestamp, doc, getDoc } from 'firebase/firestore';
 
 export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadingHistorico, isAdmin, onRecalculate, dados }) {
     const [recalculando, setRecalculando] = useState(false);
     const [modalInfo, setModalInfo] = useState(null);
     const [relatorioAuditoria, setRelatorioAuditoria] = useState(null);
 
+    // --- BUSCA DE ASSISTÊNCIA ---
+    const [assistenciaAtual, setAssistenciaAtual] = useState(0);
+    const [assistenciaHist, setAssistenciaHist] = useState({});
+
+    useEffect(() => {
+        const carregarAssistencia = async () => {
+            try {
+                // 1. Pega do mês atual
+                if (mesReferencia) {
+                    const docRef = doc(db, "estatisticas_assistencia", mesReferencia);
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists()) {
+                        setAssistenciaAtual(docSnap.data().media_fim || 0);
+                    } else {
+                        setAssistenciaAtual(0);
+                    }
+                }
+
+                // 2. Pega todas as assistências para mapear no histórico
+                const snapAssistencia = await getDocs(collection(db, "estatisticas_assistencia"));
+                const mapaAssistencia = {};
+                snapAssistencia.forEach(d => {
+                    mapaAssistencia[d.id] = d.data().media_fim || 0;
+                });
+                setAssistenciaHist(mapaAssistencia);
+
+            } catch (error) {
+                console.error("Erro ao buscar assistências:", error);
+            }
+        };
+
+        carregarAssistencia();
+    }, [mesReferencia]);
+
+    // Lista quem precisa entregar o relatório (Ativo ou Irregular)
     const pendentesAtivos = useMemo(() => {
         if (!dados) return [];
         return dados.filter(p => !p.isOrfao && (p.situacao === 'Ativo' || p.situacao === 'Irregular') && !p.entregue);
     }, [dados]);
 
+    // Total de pessoas que DEVERIAM entregar relatório neste mês
+    const totalPotencial = useMemo(() => {
+        if (!dados) return 0;
+        return dados.filter(p => !p.isOrfao && (p.situacao === 'Ativo' || p.situacao === 'Irregular')).length;
+    }, [dados]);
+
     const recalcularHistoricoCompleto = async () => {
-        if (!window.confirm("Isso fará uma auditoria completa, removendo duplicatas e sincronizando o histórico.\n\nDeseja continuar?")) return;
-        
+        if (!window.confirm("Isso fará uma auditoria completa de 24 meses, corrigindo duplicatas e refazendo toda a soma do S-1.\n\nDeseja continuar?")) return;
+
         setRecalculando(true);
         setRelatorioAuditoria(null);
 
@@ -25,10 +66,12 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
             const snapPubs = await getDocs(collection(db, "publicadores"));
             const idsAtivos = new Set(snapPubs.docs.map(d => d.id));
 
-            // 2. Buscar Relatórios Antigos
+            // 2. Buscar Relatórios Antigos (24 meses)
             const dataLimite = new Date(); dataLimite.setMonth(dataLimite.getMonth() - 24);
             const mesLimiteIso = dataLimite.toISOString().slice(0, 7);
-            const qRels = query(collection(db, "relatorios"), where("mes_referencia", ">=", mesLimiteIso));
+
+            // Busca todos os relatórios
+            const qRels = query(collection(db, "relatorios"));
             const snapRels = await getDocs(qRels);
 
             if (snapRels.empty) { toast.error("Nenhum dado encontrado."); setRecalculando(false); return; }
@@ -36,14 +79,25 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
             const acumuladorPorMes = {};
             const fantasmas = {};
             const duplicados = {};
-            const chavesProcessadas = new Set(); // Para evitar contar a mesma pessoa 2x no mesmo mês
+            const chavesProcessadas = new Set();
 
-            snapRels.forEach(doc => {
-                const d = doc.data(); 
-                const mes = d.mes_referencia;
-                const idPub = d.id_publicador;
-                
-                // Chave única: Mês + ID do Publicador
+            snapRels.forEach(docSnap => {
+                const d = docSnap.data();
+
+                // Tratamento de Aliases (Proteção contra dados antigos)
+                const mesBruto = d.mes_referencia || d.mesreferencia || d.mes_ano;
+                if (!mesBruto) return;
+
+                // Normaliza o mês para "YYYY-MM"
+                let mes = mesBruto;
+                if (mesBruto.includes('/') && mesBruto.length === 7) {
+                    mes = `${mesBruto.split('/')[1]}-${mesBruto.split('/')[0]}`;
+                }
+
+                // Filtra para pegar apenas os últimos 24 meses
+                if (mes < mesLimiteIso) return;
+
+                const idPub = d.id_publicador || d.idpublicador || "sem_id";
                 const chaveUnica = `${mes}_${idPub}`;
 
                 // --- DETECÇÃO DE DUPLICATAS ---
@@ -56,48 +110,68 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
                         };
                     }
                     duplicados[idPub].meses.add(mes.split('-').reverse().join('/'));
-                    return; // PULA este relatório, pois já contamos esse irmão neste mês
+                    return;
                 }
                 chavesProcessadas.add(chaveUnica);
-                // ------------------------------
 
-                // --- DETECÇÃO DE FANTASMAS (Excluídos) ---
+                // --- DETECÇÃO DE FANTASMAS (Excluídos/Mudou-se) ---
                 if (!idsAtivos.has(idPub)) {
                     if (!fantasmas[idPub]) {
                         fantasmas[idPub] = {
                             id: idPub,
-                            nome: d.atividade?.nome_snapshot || "(Nome não salvo)",
+                            nome: d.atividade?.nome_snapshot || d.nome_publicador || "(Nome não salvo)",
                             meses: new Set()
                         };
                     }
                     fantasmas[idPub].meses.add(mes.split('-').reverse().join('/'));
                 }
 
-                // --- SOMA ---
-                if (!acumuladorPorMes[mes]) acumuladorPorMes[mes] = { mes, pubs: { relatorios: 0, horas: 0, estudos: 0, comEstudo: 0 }, aux: { relatorios: 0, horas: 0, estudos: 0, comEstudo: 0 }, reg: { relatorios: 0, horas: 0, estudos: 0, comEstudo: 0 }, updatedAt: new Date() };
-                
-                const participou = d.atividade?.participou === true; 
-                const horas = Number(d.atividade?.horas || 0); 
-                const estudos = Number(d.atividade?.estudos || 0);
-                
-                if (!participou && horas === 0) return;
+                // --- INICIALIZA O ACUMULADOR DO MÊS SE NÃO EXISTIR ---
+                if (!acumuladorPorMes[mes]) {
+                    acumuladorPorMes[mes] = {
+                        mes,
+                        pubs: { relatorios: 0, horas: 0, estudos: 0 },
+                        aux: { relatorios: 0, horas: 0, estudos: 0 },
+                        reg: { relatorios: 0, horas: 0, estudos: 0 }
+                    };
+                }
 
-                const tipoNoMes = d.atividade?.tipo_pioneiro_mes || "Publicador"; 
-                const fezAuxiliar = d.atividade?.pioneiro_auxiliar_mes === true;
+                // Validação de Participação real
+                const checkParticipou = (val) => val === true || String(val).toLowerCase() === "true";
+                const participou = checkParticipou(d.participou) || checkParticipou(d.atividade?.participou);
+
+                const horas = Number(d.atividade?.horas || d.horas || 0);
+                const estudos = Number(d.atividade?.estudos || d.estudos || 0);
+
+                if (!participou && horas === 0 && estudos === 0) return;
+
+                const tipoNoMes = d.atividade?.tipo_pioneiro_mes || d.atividade?.tipopioneiromes || "Publicador";
+                const fezAuxiliar = d.atividade?.pioneiro_auxiliar_mes === true || d.atividade?.pioneiroauxiliarmes === true;
+
                 let categoria = 'pubs';
                 if (['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tipoNoMes)) categoria = 'reg';
                 else if (tipoNoMes === 'Pioneiro Auxiliar' || fezAuxiliar) categoria = 'aux';
 
-                acumuladorPorMes[mes][categoria].relatorios += 1; 
-                acumuladorPorMes[mes][categoria].horas += horas; 
+                acumuladorPorMes[mes][categoria].relatorios += 1;
+                acumuladorPorMes[mes][categoria].horas += Math.floor(horas);
                 acumuladorPorMes[mes][categoria].estudos += estudos;
-                if (estudos > 0) acumuladorPorMes[mes][categoria].comEstudo += 1;
             });
 
+            // Gravação no Banco usando Batch
             const batch = writeBatch(db);
-            Object.keys(acumuladorPorMes).forEach(mesKey => batch.set(doc(db, "estatisticas_s1", mesKey), acumuladorPorMes[mesKey], { merge: true }));
+            Object.keys(acumuladorPorMes).forEach(mesKey => {
+                const docRef = doc(db, "estatisticas_s1", mesKey);
+                batch.set(docRef, {
+                    mes: mesKey,
+                    pubs: acumuladorPorMes[mesKey].pubs,
+                    aux: acumuladorPorMes[mesKey].aux,
+                    reg: acumuladorPorMes[mesKey].reg,
+                    updatedAt: serverTimestamp()
+                }, { merge: true });
+            });
+
             await batch.commit();
-            
+
             const listaFantasmas = Object.values(fantasmas);
             const listaDuplicados = Object.values(duplicados);
 
@@ -110,7 +184,12 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
 
             if (onRecalculate) onRecalculate();
 
-        } catch (error) { console.error(error); toast.error("Erro."); } finally { setRecalculando(false); }
+        } catch (error) {
+            console.error(error);
+            toast.error("Erro ao recalcular.");
+        } finally {
+            setRecalculando(false);
+        }
     };
 
     const InfoBtn = ({ onClick }) => (
@@ -141,28 +220,52 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
     };
 
     const ComparativoTotais = () => {
-        if (!statsS1) return null;
-        const totalEntregues = (statsS1.pubs.relatorios + statsS1.aux.relatorios + statsS1.reg.relatorios);
-        const totalPotencial = statsS1.publicadoresPotenciais || 0;
+        const totalEntregues = (statsS1?.pubs?.relatorios || 0) + (statsS1?.aux?.relatorios || 0) + (statsS1?.reg?.relatorios || 0);
+
         return (
-            <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-200 mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-200 mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="flex items-center gap-4 p-2 relative">
                     <div className="p-3 bg-blue-50 text-blue-600 rounded-lg"><FileText size={32} /></div>
-                    <div className="flex-1"><div className="flex justify-between items-start"><p className="text-sm text-gray-500 font-bold uppercase flex items-center">Relataram no Mês <InfoBtn onClick={() => setModalInfo({ tipo: 'texto', titulo: 'Relataram', conteudo: 'Total exato de relatórios recebidos (S-1).' })} /></p></div><p className="text-3xl font-bold text-gray-800">{totalEntregues}</p></div>
+                    <div className="flex-1">
+                        <div className="flex justify-between items-start">
+                            <p className="text-sm text-gray-500 font-bold uppercase flex items-center">Relataram no Mês <InfoBtn onClick={() => setModalInfo({ tipo: 'texto', titulo: 'Relataram', conteudo: 'Total exato de relatórios recebidos (S-1).' })} /></p>
+                        </div>
+                        <p className="text-3xl font-bold text-gray-800">{totalEntregues}</p>
+                    </div>
                 </div>
-                <div className="flex items-center gap-4 p-2 border-t md:border-t-0 md:border-l border-gray-100 relative">
+                <div className="flex items-center gap-4 p-2 border-t md:border-t-0 md:border-l border-gray-100 relative pl-0 md:pl-4">
                     <div className="p-3 bg-green-50 text-green-600 rounded-lg"><Users size={32} /></div>
-                    <div className="flex-1"><div className="flex justify-between items-start"><p className="text-sm text-gray-500 font-bold uppercase">Publicadores Ativos</p>{pendentesAtivos.length > 0 ? <button onClick={() => setModalInfo({ tipo: 'pendentes', titulo: 'Pendentes' })} className="flex items-center gap-1 text-xs font-bold bg-red-100 text-red-600 px-2 py-1 rounded-full hover:bg-red-200"><Info size={12} /> Ver {pendentesAtivos.length}</button> : <span className="text-xs font-bold bg-green-100 text-green-600 px-2 py-1 rounded-full">Todos relataram</span>}</div><p className="text-3xl font-bold text-gray-800">{totalPotencial}</p></div>
+                    <div className="flex-1">
+                        <div className="flex justify-between items-start">
+                            <p className="text-sm text-gray-500 font-bold uppercase">Publicadores Ativos</p>
+                            {pendentesAtivos.length > 0 ? (
+                                <button onClick={() => setModalInfo({ tipo: 'pendentes', titulo: 'Pendentes' })} className="flex items-center gap-1 text-[10px] font-bold bg-red-100 text-red-600 px-2 py-1 rounded-full hover:bg-red-200"><Info size={12} /> Ver {pendentesAtivos.length}</button>
+                            ) : (
+                                <span className="text-[10px] font-bold bg-green-100 text-green-600 px-2 py-1 rounded-full">Todos relataram</span>
+                            )}
+                        </div>
+                        <p className="text-3xl font-bold text-gray-800">{totalPotencial}</p>
+                    </div>
+                </div>
+                {/* --- NOVO QUADRO: ASSISTÊNCIA DO MÊS --- */}
+                <div className="flex items-center gap-4 p-2 border-t md:border-t-0 md:border-l border-gray-100 relative pl-0 md:pl-4">
+                    <div className="p-3 bg-purple-50 text-purple-600 rounded-lg"><Users size={32} /></div>
+                    <div className="flex-1">
+                        <div className="flex justify-between items-start">
+                            <p className="text-sm text-gray-500 font-bold uppercase flex items-center">Assistência (Fim Sem.) <InfoBtn onClick={() => setModalInfo({ tipo: 'texto', titulo: 'Média de Assistência', conteudo: 'Média de assistência das reuniões de fim de semana (S-88).' })} /></p>
+                        </div>
+                        <p className="text-3xl font-bold text-gray-800">{assistenciaAtual}</p>
+                    </div>
                 </div>
             </div>
         );
     };
 
-    if (!statsS1) return <div>Carregando...</div>;
+    const statsSeguro = statsS1 || { pubs: {}, aux: {}, reg: {} };
 
     return (
         <div className="space-y-6 animate-in fade-in duration-300 relative">
-            
+
             {/* --- MODAL DE AUDITORIA (DUPLICADOS / FANTASMAS) --- */}
             {relatorioAuditoria && (
                 <div className="fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
@@ -174,8 +277,6 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
                             <button onClick={() => setRelatorioAuditoria(null)} className="text-gray-400 hover:text-gray-700"><X size={20} /></button>
                         </div>
                         <div className="p-5 max-h-[60vh] overflow-y-auto space-y-4">
-                            
-                            {/* SEÇÃO DUPLICADOS */}
                             {relatorioAuditoria.duplicados.length > 0 && (
                                 <div>
                                     <h4 className="text-sm font-bold text-red-700 flex items-center gap-2 mb-2"><Copy size={14} /> Relatórios Duplicados (Corrigido)</h4>
@@ -191,7 +292,6 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
                                 </div>
                             )}
 
-                            {/* SEÇÃO FANTASMAS */}
                             {relatorioAuditoria.fantasmas.length > 0 && (
                                 <div>
                                     <h4 className="text-sm font-bold text-orange-700 flex items-center gap-2 mb-2"><Users size={14} /> Publicadores Excluídos</h4>
@@ -225,30 +325,78 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
                 </div>
             )}
 
-            <div><h2 className="text-xl font-bold text-gray-700 mb-4 flex items-center gap-2"><Calendar className="text-blue-600" /> Totais de {mesReferencia.split('-').reverse().join('/')}</h2><ComparativoTotais /><div className="grid grid-cols-1 md:grid-cols-3 gap-4"><StatCardS1 titulo="Publicadores" dados={statsS1.pubs} cor="blue" icone={Users} infoKey="pubs" /><StatCardS1 titulo="Pioneiros Auxiliares" dados={statsS1.aux} cor="orange" icone={Calculator} infoKey="aux" /><StatCardS1 titulo="Pioneiros Regulares" dados={statsS1.reg} cor="yellow" icone={Users} infoKey="reg" /></div></div>
-            <div><div className="flex items-center justify-between mb-4 mt-8"><div className="flex items-center gap-2"><h2 className="text-lg font-bold text-gray-700 flex items-center gap-2"><History className="text-gray-400" /> Histórico (Totais S-1)</h2><InfoBtn onClick={() => setModalInfo({ tipo: 'texto', titulo: 'Histórico S-1', conteudo: 'Considera todos os relatórios existentes.' })} /></div>{isAdmin && <button onClick={recalcularHistoricoCompleto} disabled={recalculando} className="text-xs flex items-center gap-1 bg-gray-100 px-3 py-1.5 rounded"><RefreshCw size={12} className={recalculando ? 'animate-spin' : ''} /> Recalcular</button>}</div>
-            {loadingHistorico ? <div className="text-center py-8 text-gray-400 text-sm">Carregando...</div> : (
-                <div className="space-y-3">
-                    {historicoS1.map((h, idx) => {
-                        const totalRelataram = (h.pubs?.relatorios || 0) + (h.aux?.relatorios || 0) + (h.reg?.relatorios || 0);
-                        return (
-                            <div key={idx} className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm hover:shadow-md transition">
-                                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                                    <div className="flex items-center gap-4 min-w-[180px]">
-                                        <div className="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg font-bold text-sm border border-gray-200 text-center w-24">{h.mes.split('-').reverse().join('/')}</div>
-                                        <div className="text-xs"><span className="block text-gray-400 uppercase font-bold text-[10px]">Relataram</span><span className="text-lg font-bold text-gray-800">{totalRelataram}</span></div>
-                                    </div>
-                                    <div className="flex-1 grid grid-cols-3 gap-2 w-full md:w-auto">
-                                        <div className="bg-blue-50 p-2 rounded border border-blue-100 text-xs"><div className="font-bold text-blue-800 mb-1">Publicadores</div><div>Rel: <strong>{h.pubs?.relatorios || 0}</strong></div></div>
-                                        <div className="bg-orange-50 p-2 rounded border border-orange-100 text-xs"><div className="font-bold text-orange-800 mb-1">Auxiliares</div><div>Rel: <strong>{h.aux?.relatorios || 0}</strong></div></div>
-                                        <div className="bg-yellow-50 p-2 rounded border border-yellow-100 text-xs"><div className="font-bold text-yellow-800 mb-1">Regulares</div><div>Rel: <strong>{h.reg?.relatorios || 0}</strong></div></div>
+            <div>
+                <h2 className="text-xl font-bold text-gray-700 mb-4 flex items-center gap-2"><Calendar className="text-blue-600" /> Totais de {mesReferencia.split('-').reverse().join('/')}</h2>
+                <ComparativoTotais />
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <StatCardS1 titulo="Publicadores" dados={statsSeguro.pubs} cor="blue" icone={Users} infoKey="pubs" />
+                    <StatCardS1 titulo="Pioneiros Auxiliares" dados={statsSeguro.aux} cor="orange" icone={Calculator} infoKey="aux" />
+                    <StatCardS1 titulo="Pioneiros Regulares" dados={statsSeguro.reg} cor="yellow" icone={Users} infoKey="reg" />
+                </div>
+            </div>
+
+            <div>
+                <div className="flex items-center justify-between mb-4 mt-8">
+                    <div className="flex items-center gap-2">
+                        <h2 className="text-lg font-bold text-gray-700 flex items-center gap-2"><History className="text-gray-400" /> Histórico (Totais S-1)</h2>
+                        <InfoBtn onClick={() => setModalInfo({ tipo: 'texto', titulo: 'Histórico S-1', conteudo: 'Considera todos os relatórios existentes e cruza com as médias de assistência preenchidas.' })} />
+                    </div>
+                    {isAdmin && <button onClick={recalcularHistoricoCompleto} disabled={recalculando} className="text-xs flex items-center gap-1 bg-gray-100 px-3 py-1.5 rounded hover:bg-gray-200 transition"><RefreshCw size={12} className={recalculando ? 'animate-spin' : ''} /> Recalcular</button>}
+                </div>
+                {loadingHistorico ? <div className="text-center py-8 text-gray-400 text-sm">Carregando...</div> : (
+                    <div className="space-y-3">
+                        {historicoS1.map((h, idx) => {
+                            const totalRelataram = (h.pubs?.relatorios || 0) + (h.aux?.relatorios || 0) + (h.reg?.relatorios || 0);
+
+                            // Busca a assistência histórica pelo mapa (usando a chave "YYYY-MM")
+                            const assistenciaDesteMes = assistenciaHist[h.mes] || 0;
+
+                            return (
+                                <div key={idx} className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm hover:shadow-md transition">
+                                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                        <div className="flex items-center gap-4 min-w-[180px]">
+                                            <div className="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg font-bold text-sm border border-gray-200 text-center w-24">{h.mes.split('-').reverse().join('/')}</div>
+                                            <div className="text-xs"><span className="block text-gray-400 uppercase font-bold text-[10px]">Relataram</span><span className="text-lg font-bold text-gray-800">{totalRelataram}</span></div>
+                                        </div>
+                                        <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-2 w-full md:w-auto">
+                                            {/* Bloco Publicadores */}
+                                            <div className="bg-blue-50 p-2 rounded border border-blue-100 text-xs">
+                                                <div className="font-bold text-blue-800 mb-1 border-b border-blue-200 pb-1">Publicadores</div>
+                                                <div className="flex justify-between"><span>Relatórios:</span> <strong>{h.pubs?.relatorios || 0}</strong></div>
+                                                <div className="flex justify-between"><span>Horas:</span> <strong>{Math.floor(h.pubs?.horas || 0)}</strong></div>
+                                                <div className="flex justify-between"><span>Estudos:</span> <strong>{h.pubs?.estudos || 0}</strong></div>
+                                            </div>
+
+                                            {/* Bloco Auxiliares */}
+                                            <div className="bg-orange-50 p-2 rounded border border-orange-100 text-xs">
+                                                <div className="font-bold text-orange-800 mb-1 border-b border-orange-200 pb-1">Auxiliares</div>
+                                                <div className="flex justify-between"><span>Relatórios:</span> <strong>{h.aux?.relatorios || 0}</strong></div>
+                                                <div className="flex justify-between"><span>Horas:</span> <strong>{Math.floor(h.aux?.horas || 0)}</strong></div>
+                                                <div className="flex justify-between"><span>Estudos:</span> <strong>{h.aux?.estudos || 0}</strong></div>
+                                            </div>
+
+                                            {/* Bloco Regulares */}
+                                            <div className="bg-yellow-50 p-2 rounded border border-yellow-100 text-xs">
+                                                <div className="font-bold text-yellow-800 mb-1 border-b border-yellow-200 pb-1">Regulares</div>
+                                                <div className="flex justify-between"><span>Relatórios:</span> <strong>{h.reg?.relatorios || 0}</strong></div>
+                                                <div className="flex justify-between"><span>Horas:</span> <strong>{Math.floor(h.reg?.horas || 0)}</strong></div>
+                                                <div className="flex justify-between"><span>Estudos:</span> <strong>{h.reg?.estudos || 0}</strong></div>
+                                            </div>
+
+                                            {/* Bloco Assistência */}
+                                            <div className="bg-purple-50 p-2 rounded border border-purple-100 text-xs flex flex-col justify-center items-center h-full">
+                                                <div className="font-bold text-purple-800 mb-1 text-center w-full border-b border-purple-200 pb-1">Assistência</div>
+                                                <div className="text-2xl font-black text-purple-900 mt-1">{assistenciaDesteMes}</div>
+                                                <div className="text-[10px] text-purple-600 uppercase font-bold tracking-tight">Fim de Semana</div>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            )}</div>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
         </div>
     );
 }

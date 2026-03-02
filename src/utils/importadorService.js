@@ -32,21 +32,19 @@ export const buscarRelatoriosCSV = async (url) => {
                             obj[header] = row[index] ? row[index].toString().trim() : "";
                         });
 
-                        // Regra do Bônus
+                        // Regra do Bônus: Extrai o primeiro número da observação
                         const obs = obj['Observações'] || "";
                         const matchBonus = obs.match(/(\d+)/);
                         const horasBonus = matchBonus ? parseInt(matchBonus[0], 10) : 0;
 
                         return {
-                            ...obj,
-                            // Mapeamentos
-                            'Nome Completo': obj['Nome'],
-                            'Participou': obj['Pregou'],
-                            'Tipo': obj['Tipo'], // <--- GARANTINDO QUE O TIPO SEJA LIDO
-                            'Horas': obj['Horas'],
-                            'Estudos': obj['Estudos'],
-                            'Observações': obs,
-                            'horasBonus': horasBonus
+                            // Padronizado para bater com as variáveis lidas no AbaImportacao.jsx
+                            nome: obj['Nome'],
+                            tipo: obj['Tipo'],
+                            horas: obj['Horas'],
+                            estudos: obj['Estudos'],
+                            observacoes: obs,
+                            horasBonus: horasBonus 
                         };
                     });
 

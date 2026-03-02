@@ -4,35 +4,34 @@ import {
     getDocs,
     writeBatch,
     doc,
-    serverTimestamp
+    serverTimestamp,
+    where
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 
 /**
  * Sincronizador de Publicadores (Versão Final - Produção 🚀)
- * * LÓGICA DE NEGÓCIO:
- * 1. STATUS ATIVO:
- * - Publicador tem pelo menos 1 relatório VÁLIDO nos últimos 6 meses.
- * - Relatório Válido = (participou === true) OU (horas > 0) OU (estudos > 0).
- * - Relatórios zerados ("Não participei") são ignorados (contam como inatividade).
- * * 2. STATUS INATIVO:
- * - Não tem nenhum relatório válido na janela de 6 meses.
+ * LÓGICA DE NEGÓCIO:
+ * 1. SITUAÇÃO (Vínculo - Janela de 6 meses):
+ * - Ativo: Tem pelo menos 1 relatório VÁLIDO nos últimos 6 meses.
+ * - Inativo: Não tem nenhum relatório válido na janela de 6 meses.
+ * * 2. REGULARIDADE (Frequência - Mês Anterior):
+ * - Regular: Relatou no mês de referência (mês passado).
+ * - Irregular: Faltou com o relatório no mês de referência.
  * * 3. EXCEÇÕES (Status Intocáveis):
  * - 'Excluído', 'Removido', 'Mudou-se' não são alterados pelo script.
  * * 4. PROTEÇÃO (Imunidade para Novos):
- * - Publicador com menos de 6 meses de 'data_inicio_congregacao' permanece ATIVO
- * mesmo sem relatórios (para não inativar recém-chegados).
+ * - Publicador com menos de 6 meses de congregação permanece Ativo e Regular.
  */
 export const sincronizarSituacaoPublicadoresClient = async () => {
     // Data Oficial de Hoje
     const hoje = new Date();
 
-    console.log(`🚀 Iniciando Sincronização de Status (Produção)...`);
+    console.log(`🚀 Iniciando Sincronização de Status e Regularidade...`);
 
     try {
         // --- 1. DEFINIÇÃO DA JANELA DE 6 MESES ---
         // A referência é sempre o Mês Passado em relação a hoje.
-        // Ex: Se hoje é 15/02, a referência é Janeiro.
         const dataReferencia = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
 
         const mesesJanela = [];
@@ -42,11 +41,12 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
             mesesJanela.push(formatarMesISO(d));
         }
 
-        console.log(`📅 Janela de Análise (Mês Ref: ${mesesJanela[0]}):`, mesesJanela);
+        const mesAnterior = mesesJanela[0]; // O mês exato que define se é Regular ou Irregular
+        console.log(`📅 Janela de Análise (Mês Ref: ${mesAnterior}):`, mesesJanela);
 
         // --- 2. MAPEAR RELATÓRIOS COM PARTICIPAÇÃO REAL ---
-        // Busca todos para processar em memória (mais eficiente que múltiplas queries)
-        const qHistorico = query(collection(db, 'relatorios'));
+        // OTIMIZAÇÃO: Busca APENAS relatórios dos últimos 6 meses (Economiza milhares de leituras)
+        const qHistorico = query(collection(db, 'relatorios'), where('mes_referencia', 'in', mesesJanela));
         const historicoSnap = await getDocs(qHistorico);
 
         // Set contém apenas IDs que trabalharam de fato (Participou = true ou Horas > 0)
@@ -56,7 +56,7 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
         historicoSnap.forEach(docSnap => {
             const dados = docSnap.data();
 
-            // 🧹 LIMPEZA DE ID (Remove espaços invisíveis)
+            // 🧹 LIMPEZA DE ID
             const rawId = dados.id_publicador || dados.publicador_id || "0";
             const pubId = String(rawId).trim();
 
@@ -65,7 +65,6 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
             if (dados.mes_referencia) {
                 dataRel = String(dados.mes_referencia).trim();
             } else if (dados.mes_ano) {
-                // Tratamento legado para formatos antigos
                 const bruta = String(dados.mes_ano).replace('/', '-').trim();
                 if (bruta.length === 7 && bruta.indexOf('-') === 2) {
                     dataRel = `${bruta.split('-')[1]}-${bruta.split('-')[0]}`;
@@ -74,11 +73,7 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
                 }
             }
 
-            // Ignora relatórios fora da janela de 6 meses
-            if (!mesesJanela.includes(dataRel)) return;
-
             // --- VALIDAÇÃO DE PARTICIPAÇÃO ---
-            // Verifica flags de string ("true") e booleanos (true)
             const checkParticipou = (val) => val === true || String(val).toLowerCase() === "true";
 
             const participouFlag = checkParticipou(dados.participou) || checkParticipou(dados.atividade?.participou);
@@ -89,8 +84,7 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
             if (participouFlag || horas > 0 || estudos > 0) {
                 mapaParticipacao.add(`${pubId}|${dataRel}`);
 
-                // Contagem interna para validação
-                if (dataRel === mesesJanela[0]) contagemParticipouMesPassado++;
+                if (dataRel === mesAnterior) contagemParticipouMesPassado++;
             }
         });
 
@@ -105,22 +99,27 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
 
         publicadoresSnap.forEach(docPub => {
             const pub = docPub.data();
-            const pid = String(docPub.id).trim(); // Garante ID limpo
+            const pid = String(docPub.id).trim();
 
             if (!pub.dados_eclesiasticos) return;
 
-            const situacaoAtual = pub.dados_eclesiasticos.situacao;
+            const situacaoAtual = pub.dados_eclesiasticos.situacao || 'Ativo';
+            const regularidadeAtual = pub.dados_eclesiasticos.regularidade || 'Regular';
 
             // 🛑 1. BLOQUEIO DE SEGURANÇA: EXCLUÍDOS E REMOVIDOS
-            // Se o publicador tiver qualquer um desses status, o script NÃO mexe.
             if (['Excluído', 'Removido', 'Mudou-se'].includes(situacaoAtual)) {
                 return;
             }
 
-            let novaSituacao = 'Inativo'; // Assume o pior caso (Inativo) por padrão
+            let novaSituacao = 'Inativo'; // Assume o pior caso
+            let novaRegularidade = 'Irregular'; // Assume o pior caso
 
-            // 🔍 2. VERIFICA ATIVIDADE RECENTE
-            // Se tiver qualquer relatório válido na janela, vira Ativo
+            // 🔍 2. AVALIA A REGULARIDADE (Apenas o último mês)
+            if (mapaParticipacao.has(`${pid}|${mesAnterior}`)) {
+                novaRegularidade = 'Regular';
+            }
+
+            // 🔍 3. AVALIA A SITUAÇÃO (Janela de 6 meses)
             let temAtividadeRecente = false;
             for (const mes of mesesJanela) {
                 if (mapaParticipacao.has(`${pid}|${mes}`)) {
@@ -131,32 +130,43 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
 
             if (temAtividadeRecente) {
                 novaSituacao = 'Ativo';
-            } else {
-                // 🛡️ 3. PROTEÇÃO PARA NOVATOS (< 6 Meses)
-                // Se não tem relatório, verificamos se é recém-chegado
-                const dataInicio = pub.dados_eclesiasticos.data_inicio_congregacao
-                    ? new Date(pub.dados_eclesiasticos.data_inicio_congregacao + "T12:00:00")
-                    : new Date(2000, 0, 1); // Data antiga segura caso não tenha cadastro
+            }
 
+            // 🛡️ 4. PROTEÇÃO INFALÍVEL PARA NOVATOS (< 6 Meses)
+            // Extraído do 'else' para garantir que ninguém escape dessa regra
+            const dataInicioStr = pub.dados_eclesiasticos.data_inicio || pub.dados_eclesiasticos.data_inicio_congregacao;
+
+            if (dataInicioStr) {
+                // Normaliza datas em "DD/MM/YYYY" ou "YYYY-MM-DD" para o JavaScript ler corretamente
+                const dataFormatada = dataInicioStr.includes('/')
+                    ? dataInicioStr.split('/').reverse().join('-')
+                    : dataInicioStr;
+
+                // Adiciona T12:00:00 para evitar bugs de fuso horário que jogam a data pro dia anterior
+                const dataInicio = new Date(`${dataFormatada}T12:00:00`);
+
+                // Calcula a diferença real em meses
                 const diffMeses = (hoje.getFullYear() - dataInicio.getFullYear()) * 12 + (hoje.getMonth() - dataInicio.getMonth());
 
-                // Se tem menos de 6 meses de casa, segura como Ativo
-                if (diffMeses < 6) {
+                // Regra de Ouro: Se tem menos de 6 meses, o sistema o PROÍBE de ser Inativo
+                if (diffMeses <= 6) {
                     novaSituacao = 'Ativo';
                 }
             }
 
-            // Só adiciona ao batch se houver mudança de status
-            if (novaSituacao !== situacaoAtual) {
+            // 🚀 5. ATUALIZA APENAS SE HOUVE MUDANÇA
+            if (novaSituacao !== situacaoAtual || novaRegularidade !== regularidadeAtual) {
                 const pubRef = doc(db, 'publicadores', docPub.id);
                 batch.update(pubRef, {
                     'dados_eclesiasticos.situacao': novaSituacao,
+                    'dados_eclesiasticos.regularidade': novaRegularidade,
                     'dados_eclesiasticos.ultima_atualizacao_status': serverTimestamp()
                 });
                 atualizacoesCount++;
             }
-        });
+        }); // <-- FECHAMENTO DO FOREACH QUE ESTAVA FALTANDO!
 
+        // --- 6. SALVAMENTO EM LOTE (BATCH COMMIT) ---
         if (atualizacoesCount > 0) {
             await batch.commit();
             console.log(`✅ Processo finalizado! ${atualizacoesCount} status atualizados.`);
@@ -164,7 +174,6 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
             console.log("✨ Tudo atualizado. Nenhuma mudança necessária.");
         }
 
-        // RETORNO COMPLETO (Corrige o erro da mensagem em branco)
         return {
             sucesso: true,
             mensagem: `${atualizacoesCount} publicadores tiveram o status atualizado.`,

@@ -2,12 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { db } from '../../config/firebase';
 import { collection, getDocs, doc, getDoc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
-import { Settings, Save, Plus, Trash2, Database, Link as LinkIcon, AlertCircle, Users, Shield, UserCheck } from 'lucide-react';
+import { Settings, Save, Plus, Trash2, Database, Link as LinkIcon, AlertCircle, Users, Shield, UserCheck, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
+
+// Importação do sincronizador
+import { sincronizarSituacaoPublicadoresClient } from '../../utils/sincronizadorpublicadores';
 
 export default function Configuracoes() {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [syncing, setSyncing] = useState(false);
 
     // --- ESTADOS DE CONFIGURAÇÃO GERAL ---
     const [grupos, setGrupos] = useState([]);
@@ -103,17 +107,16 @@ export default function Configuracoes() {
         setGrupos(novosGrupos);
     };
 
-    // --- FUNÇÕES DE USUÁRIO (NOVA IMPLEMENTAÇÃO) ---
+    // --- FUNÇÕES DE USUÁRIO ---
     const adicionarUsuario = async () => {
         if (!novoEmailUsuario.trim()) return;
         const emailFormatado = novoEmailUsuario.trim().toLowerCase();
 
         setLoadingUsuarios(true);
         try {
-            // Usamos setDoc com o email como ID para garantir unicidade e busca rápida
             await setDoc(doc(db, "usuarios", emailFormatado), {
                 email: emailFormatado,
-                papel: novoPapelUsuario, // 'admin' ou 'comum'
+                papel: novoPapelUsuario,
                 criado_em: new Date(),
                 ativo: true
             });
@@ -135,6 +138,25 @@ export default function Configuracoes() {
             } catch (error) {
                 toast.error("Erro ao remover usuário.");
             }
+        }
+    };
+
+    // --- FUNÇÃO DE FORÇAR SINCRONIZAÇÃO (NOVA) ---
+    const handleForcarSincronizacao = async () => {
+        if (!window.confirm("Atenção: Isso varrerá toda a base de dados para recalcular quem está Ativo, Inativo ou Irregular. Essa operação pode levar alguns segundos.\n\nDeseja continuar?")) {
+            return;
+        }
+
+        setSyncing(true);
+        const toastId = toast.loading("Sincronizando status dos publicadores...");
+        try {
+            const resultado = await sincronizarSituacaoPublicadoresClient();
+            toast.success(resultado.mensagem || "Sincronização concluída com sucesso!", { id: toastId });
+        } catch (error) {
+            console.error("Erro na sincronização manual:", error);
+            toast.error("Ocorreu um erro ao sincronizar.", { id: toastId });
+        } finally {
+            setSyncing(false);
         }
     };
 
@@ -229,7 +251,7 @@ export default function Configuracoes() {
                     </div>
                 </div>
 
-                {/* CARD 2: CONTROLE DE ACESSO (NOVO) */}
+                {/* CARD 2: CONTROLE DE ACESSO */}
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 border-l-4 border-l-blue-600">
                     <div className="flex justify-between items-center mb-4 border-b pb-2">
                         <h2 className="text-lg font-bold text-gray-700 flex items-center gap-2">
@@ -353,6 +375,29 @@ export default function Configuracoes() {
                                 {["Sábado", "Domingo"].map(d => <option key={d} value={d}>{d}</option>)}
                             </select>
                         </div>
+                    </div>
+                </div>
+
+                {/* CARD 5: MANUTENÇÃO (NOVO) */}
+                <div className="bg-white p-6 rounded-xl shadow-sm border border-red-200 border-l-4 border-l-red-600">
+                    <h2 className="text-lg font-bold text-red-800 mb-4 border-b border-red-100 pb-2 flex items-center gap-2">
+                        <AlertCircle size={20} /> Manutenção do Banco de Dados
+                    </h2>
+                    <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-red-50 p-4 rounded-lg border border-red-100">
+                        <div>
+                            <h3 className="font-bold text-red-900 text-sm">Forçar Sincronização de Status</h3>
+                            <p className="text-xs text-red-700 mt-1">
+                                Reavalia todos os publicadores da congregação e os classifica como <strong>Ativo, Inativo ou Irregular</strong> baseado nos relatórios lançados. Utilize apenas se notar alguma inconsistência no Dashboard.
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={handleForcarSincronizacao}
+                            disabled={syncing}
+                            className="bg-red-600 text-white px-5 py-2.5 rounded-lg hover:bg-red-700 text-sm font-bold disabled:opacity-50 whitespace-nowrap flex items-center gap-2 shadow-sm"
+                        >
+                            {syncing ? "Sincronizando..." : <><RefreshCw size={16} /> Sincronizar Agora</>}
+                        </button>
                     </div>
                 </div>
 

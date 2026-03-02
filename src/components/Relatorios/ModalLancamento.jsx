@@ -6,14 +6,18 @@ import {
     collection,
     doc,
     setDoc,
-    updateDoc,
     deleteDoc,
     writeBatch,
-    Timestamp
+    Timestamp,
+    increment,
+    serverTimestamp
 } from 'firebase/firestore';
 
 import { X, Save, Clock, BookOpen, Calendar, Star, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
+
+// IMPORTAÇÃO DO SINCRONIZADOR
+import { sincronizarSituacaoPublicadoresClient } from '../../utils/sincronizadorpublicadores';
 
 export default function ModalLancamento({
     idPublicador,
@@ -64,7 +68,6 @@ export default function ModalLancamento({
             );
         }
 
-        // se o publicador é pioneiro regular/especial/missionário, sugerir isso
         const t = tipoPioneiroPublicador;
         const tipos = ['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'];
         if (t && tipos.includes(t)) return t;
@@ -73,11 +76,99 @@ export default function ModalLancamento({
     }, [isEditing, atividadeEdit, tipoPioneiroPublicador]);
 
     // -------------------------
+    // Helper de Estatísticas S-1
+    // -------------------------
+    const getCategoria = (tipo) => {
+        if (['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tipo)) return 'reg';
+        if (tipo === 'Pioneiro Auxiliar') return 'aux';
+        return 'pubs';
+    };
+
+    const aplicarEstatisticas = (batch, isEdit, oldData, newData) => {
+        if (!isEdit) {
+            // Criação de um Relatório Novo
+            if (newData.participou) {
+                batch.set(doc(db, 'estatisticas_s1', newData.mes), {
+                    mes: newData.mes,
+                    [newData.cat]: {
+                        horas: increment(newData.horas),
+                        estudos: increment(newData.estudos),
+                        relatorios: increment(1)
+                    },
+                    updatedAt: serverTimestamp()
+                }, { merge: true });
+            }
+        } else {
+            // Edição de um Relatório Existente
+            if (oldData.mes === newData.mes) {
+                if (oldData.cat === newData.cat) {
+                    const deltaHoras = newData.horas - oldData.horas;
+                    const deltaEstudos = newData.estudos - oldData.estudos;
+                    const deltaRel = (newData.participou ? 1 : 0) - (oldData.participou ? 1 : 0);
+
+                    if (deltaHoras !== 0 || deltaEstudos !== 0 || deltaRel !== 0) {
+                        batch.set(doc(db, 'estatisticas_s1', newData.mes), {
+                            mes: newData.mes,
+                            [newData.cat]: {
+                                horas: increment(deltaHoras),
+                                estudos: increment(deltaEstudos),
+                                relatorios: increment(deltaRel)
+                            },
+                            updatedAt: serverTimestamp()
+                        }, { merge: true });
+                    }
+                } else {
+                    const updates = { mes: newData.mes, updatedAt: serverTimestamp() };
+                    if (oldData.participou) {
+                        updates[oldData.cat] = {
+                            horas: increment(-oldData.horas),
+                            estudos: increment(-oldData.estudos),
+                            relatorios: increment(-1)
+                        };
+                    }
+                    if (newData.participou) {
+                        updates[newData.cat] = {
+                            horas: increment(newData.horas),
+                            estudos: increment(newData.estudos),
+                            relatorios: increment(1)
+                        };
+                    }
+                    if (oldData.participou || newData.participou) {
+                        batch.set(doc(db, 'estatisticas_s1', newData.mes), updates, { merge: true });
+                    }
+                }
+            } else {
+                if (oldData.participou) {
+                    batch.set(doc(db, 'estatisticas_s1', oldData.mes), {
+                        mes: oldData.mes,
+                        [oldData.cat]: {
+                            horas: increment(-oldData.horas),
+                            estudos: increment(-oldData.estudos),
+                            relatorios: increment(-1)
+                        },
+                        updatedAt: serverTimestamp()
+                    }, { merge: true });
+                }
+                if (newData.participou) {
+                    batch.set(doc(db, 'estatisticas_s1', newData.mes), {
+                        mes: newData.mes,
+                        [newData.cat]: {
+                            horas: increment(newData.horas),
+                            estudos: increment(newData.estudos),
+                            relatorios: increment(1)
+                        },
+                        updatedAt: serverTimestamp()
+                    }, { merge: true });
+                }
+            }
+        }
+    };
+
+    // -------------------------
     // Form
     // -------------------------
     const { register, handleSubmit, watch, reset } = useForm({
         defaultValues: {
-            // Mantive o nome do campo (mes_referencia) para não mexer no JSX do form
             mes_referencia: isEditing ? (mesRefEdit || new Date().toISOString().slice(0, 7)) : new Date().toISOString().slice(0, 7),
             participou: isEditing ? (atividadeEdit.participou === true) : true,
             tipo_servico_mes: tipoServicoInicial,
@@ -90,7 +181,6 @@ export default function ModalLancamento({
 
     useEffect(() => {
         if (!relatorioParaEditar) return;
-
         const mes = firstDefined(relatorioParaEditar, ['mesreferencia', 'mes_referencia']) || new Date().toISOString().slice(0, 7);
         const atv = relatorioParaEditar.atividade || {};
 
@@ -107,7 +197,6 @@ export default function ModalLancamento({
 
     const participou = watch('participou');
     const tipoServico = watch('tipo_servico_mes');
-
     const tiposComHoras = ['Pioneiro Auxiliar', 'Pioneiro Regular', 'Pioneiro Especial', 'Missionário'];
     const deveRelatarHoras = tiposComHoras.includes(tipoServico);
 
@@ -122,29 +211,55 @@ export default function ModalLancamento({
         }
 
         setDeleting(true);
+        toast.loading("Removendo relatório...", { id: "delete_toast" });
         try {
-            const mes = firstDefined(relatorioParaEditar, ['mesreferencia', 'mes_referencia']);
-            const docIdPadrao = mes ? buildRelatorioId(mes, idPublicador) : null;
-
-            // tenta usar um id vindo do chamador, senão usa o padrão
-            const docId =
-                firstDefined(relatorioParaEditar, ['__docId', 'docId', 'id']) ||
-                docIdPadrao;
+            const mesAntigo = firstDefined(relatorioParaEditar, ['mesreferencia', 'mes_referencia']);
+            const docIdPadrao = mesAntigo ? buildRelatorioId(mesAntigo, idPublicador) : null;
+            const docId = firstDefined(relatorioParaEditar, ['__docId', 'docId', 'id']) || docIdPadrao;
 
             if (!docId) {
-                toast.error('Não consegui identificar o ID do relatório para excluir.');
+                toast.error('Não consegui identificar o ID do relatório para excluir.', { id: "delete_toast" });
                 return;
             }
 
+            const batch = writeBatch(db);
             const docRef = doc(db, 'relatorios', docId);
-            await deleteDoc(docRef);
+            batch.delete(docRef);
 
-            toast.success('Relatório removido com sucesso!');
+            // Reverte os dados do S-1
+            const oldParticipou = atividadeEdit.participou === true;
+            if (oldParticipou && mesAntigo) {
+                const oldHoras = Number(atividadeEdit.horas || 0);
+                const oldEstudos = Number(atividadeEdit.estudos || 0);
+                const oldTipo = firstDefined(atividadeEdit, ['tipopioneiromes', 'tipo_pioneiro_mes']) || 'Publicador';
+                const oldCat = getCategoria(oldTipo);
+
+                batch.set(doc(db, 'estatisticas_s1', mesAntigo), {
+                    mes: mesAntigo,
+                    [oldCat]: {
+                        horas: increment(-oldHoras),
+                        estudos: increment(-oldEstudos),
+                        relatorios: increment(-1)
+                    },
+                    updatedAt: serverTimestamp()
+                }, { merge: true });
+            }
+
+            await batch.commit();
+
+            // MÁGICA: Avalia a situação novamente (pode ter ficado inativo após a exclusão)
+            try {
+                await sincronizarSituacaoPublicadoresClient();
+            } catch (errSync) {
+                console.error("Erro no sync automático pós-exclusão:", errSync);
+            }
+
+            toast.success('Relatório removido com sucesso!', { id: "delete_toast" });
             onSucesso();
             onClose();
         } catch (error) {
             console.error(error);
-            toast.error('Erro ao excluir: ' + (error?.message || ''));
+            toast.error('Erro ao excluir: ' + (error?.message || ''), { id: "delete_toast" });
         } finally {
             setDeleting(false);
         }
@@ -155,108 +270,111 @@ export default function ModalLancamento({
     // -------------------------
     const onSubmit = async (data) => {
         setSaving(true);
+        toast.loading("Salvando relatório...", { id: "save_toast" });
         try {
-            const mesRef = data.mes_referencia; // "YYYY-MM"
+            const batch = writeBatch(db);
+            const mesRef = data.mes_referencia;
 
             const [anoStr, mesStr] = mesRef.split('-');
             const anoCalendario = parseInt(anoStr, 10);
             const mes = parseInt(mesStr, 10);
-
-            // Regra de Negócio: Ano de serviço começa em Setembro
             const anoServico = mes >= 9 ? anoCalendario + 1 : anoCalendario;
 
             const docIdNovo = buildRelatorioId(mesRef, idPublicador);
-
-            // Se estiver editando, precisamos descobrir qual era o docId antigo
             const mesAntigo = firstDefined(relatorioParaEditar, ['mesreferencia', 'mes_referencia']);
             const docIdAntigoPadrao = mesAntigo ? buildRelatorioId(mesAntigo, idPublicador) : null;
+            const docIdAntigo = isEditing ? (firstDefined(relatorioParaEditar, ['__docId', 'docId', 'id']) || docIdAntigoPadrao) : null;
 
-            const docIdAntigo =
-                (isEditing
-                    ? (firstDefined(relatorioParaEditar, ['__docId', 'docId', 'id']) || docIdAntigoPadrao)
-                    : null);
-
-            const horas = (data.participou && deveRelatarHoras) ? (parseInt(data.horas, 10) || 0) : 0;
-            const bonus = (data.participou && deveRelatarHoras) ? (parseInt(data.bonus_horas, 10) || 0) : 0;
-            const estudos = data.participou ? (parseInt(data.estudos, 10) || 0) : 0;
+            const newParticipou = data.participou === true;
+            const newHoras = (newParticipou && deveRelatarHoras) ? (parseInt(data.horas, 10) || 0) : 0;
+            const newBonus = (newParticipou && deveRelatarHoras) ? (parseInt(data.bonus_horas, 10) || 0) : 0;
+            const newEstudos = newParticipou ? (parseInt(data.estudos, 10) || 0) : 0;
+            const newTipo = data.tipo_servico_mes;
+            const newCat = getCategoria(newTipo);
 
             const payload = {
-                // ---- OFICIAL (sem underscore) ----
                 idpublicador: idPublicador,
                 mesreferencia: mesRef,
                 anoservico: anoServico,
-                datacriacao: isEditing
-                    ? (firstDefined(relatorioParaEditar, ['datacriacao', 'data_criacao']) || Timestamp.now())
-                    : Timestamp.now(),
+                datacriacao: isEditing ? (firstDefined(relatorioParaEditar, ['datacriacao', 'data_criacao']) || Timestamp.now()) : Timestamp.now(),
                 dataatualizacao: Timestamp.now(),
                 atualizadoem: Timestamp.now(),
 
                 atividade: {
-                    participou: data.participou === true,
-                    tipopioneiromes: data.tipo_servico_mes,
-                    horas,
-                    bonushoras: bonus,
-                    estudos,
-                    pioneiroauxiliarmes: data.tipo_servico_mes === 'Pioneiro Auxiliar',
+                    participou: newParticipou,
+                    tipopioneiromes: newTipo,
+                    horas: newHoras,
+                    bonushoras: newBonus,
+                    estudos: newEstudos,
+                    pioneiroauxiliarmes: newTipo === 'Pioneiro Auxiliar',
                     observacoes: data.observacoes || ''
                 },
 
-                // ---- ALIASES (underscore) p/ legado ----
                 id_publicador: idPublicador,
                 mes_referencia: mesRef,
                 ano_servico: anoServico,
-                data_criacao: isEditing
-                    ? (firstDefined(relatorioParaEditar, ['datacriacao', 'data_criacao']) || Timestamp.now())
-                    : Timestamp.now(),
+                data_criacao: isEditing ? (firstDefined(relatorioParaEditar, ['datacriacao', 'data_criacao']) || Timestamp.now()) : Timestamp.now(),
                 data_atualizacao: Timestamp.now(),
                 atividade_alias: {
-                    tipo_pioneiro_mes: data.tipo_servico_mes,
-                    bonus_horas: bonus,
-                    pioneiro_auxiliar_mes: data.tipo_servico_mes === 'Pioneiro Auxiliar'
+                    tipo_pioneiro_mes: newTipo,
+                    bonus_horas: newBonus,
+                    pioneiro_auxiliar_mes: newTipo === 'Pioneiro Auxiliar'
                 }
             };
 
             if (isEditing) {
-                if (!docIdAntigo) {
-                    // fallback: só grava no novo docId
-                    await setDoc(doc(db, 'relatorios', docIdNovo), payload, { merge: true });
-                } else if (docIdAntigo === docIdNovo) {
-                    await setDoc(doc(db, 'relatorios', docIdNovo), payload, { merge: true });
+                const oldParticipou = atividadeEdit.participou === true;
+                const oldHoras = oldParticipou ? Number(atividadeEdit.horas || 0) : 0;
+                const oldEstudos = oldParticipou ? Number(atividadeEdit.estudos || 0) : 0;
+                const oldTipo = firstDefined(atividadeEdit, ['tipopioneiromes', 'tipo_pioneiro_mes']) || 'Publicador';
+                const oldCat = getCategoria(oldTipo);
+
+                if (!docIdAntigo || docIdAntigo === docIdNovo) {
+                    batch.set(doc(db, 'relatorios', docIdNovo), payload, { merge: true });
                 } else {
-                    // Mês mudou: cria/atualiza no novo ID e apaga o antigo (atômico)
-                    const batch = writeBatch(db);
                     batch.set(doc(db, 'relatorios', docIdNovo), payload, { merge: true });
                     batch.delete(doc(db, 'relatorios', docIdAntigo));
-                    await batch.commit();
                 }
 
-                toast.success('Relatório atualizado!');
+                aplicarEstatisticas(batch, true,
+                    { mes: mesAntigo, cat: oldCat, participou: oldParticipou, horas: oldHoras, estudos: oldEstudos },
+                    { mes: mesRef, cat: newCat, participou: newParticipou, horas: newHoras, estudos: newEstudos }
+                );
             } else {
-                // Create: grava diretamente no DocID composto (idempotente)
-                await setDoc(doc(db, 'relatorios', docIdNovo), payload, { merge: true });
-
-                toast.success('Relatório salvo!');
+                batch.set(doc(db, 'relatorios', docIdNovo), payload, { merge: true });
+                aplicarEstatisticas(batch, false, null, { mes: mesRef, cat: newCat, participou: newParticipou, horas: newHoras, estudos: newEstudos });
             }
 
-            // Atualiza "último relatório postado" no publicador (salva os dois padrões)
             const pubRef = doc(db, 'publicadores', idPublicador);
-            await updateDoc(pubRef, {
+            batch.update(pubRef, {
                 'statusatividade.ultimorelatoriopostado': mesRef,
                 'status_atividade.ultimo_relatorio_postado': mesRef
             });
+
+            await batch.commit();
+
+            // MÁGICA: Avalia a situação novamente (pode ter saído de inativo para ativo)
+            toast.loading("Atualizando status do publicador...", { id: "save_toast" });
+            try {
+                await sincronizarSituacaoPublicadoresClient();
+                toast.success(isEditing ? 'Relatório e Status atualizados!' : 'Relatório salvo e Status atualizado!', { id: "save_toast" });
+            } catch (errSync) {
+                console.error("Erro no sync automático:", errSync);
+                toast.success(isEditing ? 'Relatório atualizado!' : 'Relatório salvo!', { id: "save_toast" });
+            }
 
             onSucesso();
             onClose();
         } catch (error) {
             console.error(error);
-            toast.error('Erro ao salvar: ' + (error?.message || ''));
+            toast.error('Erro ao salvar: ' + (error?.message || ''), { id: "save_toast" });
         } finally {
             setSaving(false);
         }
     };
 
     // -------------------------
-    // UI (seu JSX original)
+    // UI
     // -------------------------
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">

@@ -1,8 +1,7 @@
-// src/pages/Relatorios/VisaoGeralRelatorios.jsx
 import React, { useState, useEffect } from 'react';
 import { db } from '../../config/firebase';
 import { collection, getDocs, query, where, orderBy, doc, getDoc, setDoc } from 'firebase/firestore';
-import { FileText, FileBarChart, CloudDownload, ChevronLeft, ChevronRight, AlertTriangle, Search } from 'lucide-react';
+import { FileText, FileBarChart, CloudDownload, ChevronLeft, ChevronRight, AlertTriangle, Search, RefreshCw } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import toast from 'react-hot-toast';
 
@@ -10,7 +9,7 @@ import AbaControleMensal from './components/AbaControleMensal';
 import AbaTotaisS1 from './components/AbaTotaisS1';
 import AbaImportacao from './components/AbaImportacao';
 
-// Notificação de Órfãos (Topo da Tela)
+// Notificação de Órfãos
 const NotificacaoOrfaos = ({ orfaos }) => {
     if (!orfaos || orfaos.length === 0) return null;
     return (
@@ -46,28 +45,89 @@ export default function VisaoGeralRelatorios() {
     const [loadingHistorico, setLoadingHistorico] = useState(false);
     const [gruposConfig, setGruposConfig] = useState([]);
 
-    useEffect(() => { carregarDadosCompletos(); if (isAdmin) carregarConfigGrupos(); }, [mesReferencia, isAdmin]);
+    // --- EFEITOS SEPARADOS PARA OTIMIZAÇÃO ---
+
+    // 1. Carrega Publicadores (COM CACHE) - Roda apenas na montagem ou quando forçado
+    useEffect(() => {
+        carregarPublicadoresComCache();
+        if (isAdmin) carregarConfigGrupos();
+    }, [isAdmin]);
+
+    // 2. Carrega Relatórios do Mês - Roda sempre que muda o mês (mas já tendo os pubs em memória)
+    useEffect(() => {
+        if (listaPublicadores.length > 0) {
+            carregarRelatoriosDoMes();
+        }
+    }, [mesReferencia, listaPublicadores]); // Depende da lista já estar carregada
+
     useEffect(() => { if (abaAtiva === 's1') carregarHistorico(); }, [abaAtiva, mesReferencia]);
 
     const mudarMes = (d) => { const [a, m] = mesReferencia.split('-').map(Number); const nd = new Date(a, m - 1 + d, 1); setMesReferencia(nd.toISOString().slice(0, 7)); };
     const carregarConfigGrupos = async () => { try { const s = await getDoc(doc(db, "config", "geral")); if (s.exists()) setGruposConfig((s.data().grupos || []).filter(g => g.link_csv)); } catch (e) { console.error(e); } };
     const carregarHistorico = async () => { setLoadingHistorico(true); try { const m = []; for (let i = 0; i < 6; i++) { const d = new Date(mesReferencia + "-02"); d.setMonth(d.getMonth() - i); m.push(d.toISOString().slice(0, 7)); } const s = await Promise.all(m.map(id => getDoc(doc(db, "estatisticas_s1", id)))); setHistoricoS1(s.filter(x => x.exists()).map(x => x.data()).sort((a, b) => b.mes.localeCompare(a.mes))); } catch (e) { console.error(e); } finally { setLoadingHistorico(false); } };
 
-    const carregarDadosCompletos = async () => {
+    // --- CACHE DE PUBLICADORES ---
+    const carregarPublicadoresComCache = async (forceRefresh = false) => {
+        setLoading(true);
+        try {
+            const cacheKey = 's21_publicadores_cache';
+            const cacheTimeKey = 's21_publicadores_time';
+
+            // Verifica Cache (se não for forçado)
+            if (!forceRefresh) {
+                const cachedData = localStorage.getItem(cacheKey);
+                const cachedTime = localStorage.getItem(cacheTimeKey);
+                const now = new Date().getTime();
+
+                // Validade: 24 horas
+                if (cachedData && cachedTime && (now - cachedTime < 1000 * 60 * 60 * 24)) {
+                    console.log("Usando cache de publicadores (Economia de leituras!)");
+                    setListaPublicadores(JSON.parse(cachedData));
+                    setLoading(false); // Libera loading inicial se for cache
+                    return;
+                }
+            }
+
+            console.log("Buscando publicadores do Firebase...");
+            const qPubs = query(collection(db, "publicadores"), orderBy("dados_pessoais.nome_completo"));
+            const snapPubs = await getDocs(qPubs);
+            const lista = snapPubs.docs.map(d => ({ id: d.id, ...d.data() }));
+
+            setListaPublicadores(lista);
+
+            // Salva no Cache
+            localStorage.setItem(cacheKey, JSON.stringify(lista));
+            localStorage.setItem(cacheTimeKey, new Date().getTime());
+
+        } catch (error) {
+            console.error("Erro ao carregar publicadores:", error);
+            toast.error("Erro ao carregar lista de publicadores.");
+        } finally {
+            // Se foi refresh forçado, o loading termina aqui. Se foi cache, já terminou antes.
+            if (forceRefresh) setLoading(false);
+        }
+    };
+
+    const atualizarCache = () => {
+        carregarPublicadoresComCache(true);
+        toast.success("Lista de publicadores atualizada!");
+    };
+
+    // --- CARREGAMENTO DE RELATÓRIOS (Sem Cache - Dados Vivos) ---
+    const carregarRelatoriosDoMes = async () => {
         setLoading(true); setOrfaos([]);
         try {
-            const sPubs = await getDocs(query(collection(db, "publicadores"), orderBy("dados_pessoais.nome_completo")));
+            // Busca apenas os relatórios do mês (Leitura otimizada)
             const sRels = await getDocs(query(collection(db, "relatorios"), where("mes_referencia", "==", mesReferencia)));
 
-            const lPubs = sPubs.docs.map(d => ({ id: d.id, ...d.data() })); setListaPublicadores(lPubs);
             const mRels = {}; sRels.forEach(d => mRels[d.data().id_publicador] = d.data());
 
             const idsProc = new Set();
             const novosOrfaos = [];
             let totalPotencial = 0;
 
-            // --- 3. Processa Cadastrados (Lista Oficial) ---
-            const lista = lPubs.map(pub => {
+            // Processa usando a lista de publicadores JÁ CARREGADA (do state/cache)
+            const lista = listaPublicadores.map(pub => {
                 const rel = mRels[pub.id]; const ent = !!rel;
                 if (ent) idsProc.add(pub.id);
 
@@ -83,28 +143,18 @@ export default function VisaoGeralRelatorios() {
 
                 if (sit === 'Ativo' || sit === 'Irregular') totalPotencial++;
 
-                // === CORREÇÃO DE HIERARQUIA DE TIPO ===
                 let tipo = pub.dados_eclesiasticos.pioneiro_tipo || "Publicador";
                 if (ent && rel.atividade) {
                     const tRel = rel.atividade.tipo_pioneiro_mes;
                     const chkAux = rel.atividade.pioneiro_auxiliar_mes;
-
-                    // PRIORIDADE 1: Se é Regular no relatório, é Regular (independente do checkbox aux)
-                    if (['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tRel)) {
-                        tipo = tRel;
-                    }
-                    // PRIORIDADE 2: Se não é Regular, mas marcou Auxiliar
-                    else if (tRel === 'Pioneiro Auxiliar' || chkAux === true) {
-                        tipo = "Pioneiro Auxiliar";
-                    }
-                    // Caso contrário, mantém o tipo do cadastro ou Publicador
+                    if (['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tRel)) tipo = tRel;
+                    else if (tRel === 'Pioneiro Auxiliar' || chkAux === true) tipo = "Pioneiro Auxiliar";
                 }
-                // ======================================
 
                 return { id: pub.id, nome: pub.dados_pessoais.nome_completo, grupo: pub.dados_eclesiasticos.grupo_campo || "Sem Grupo", tipo, entregue: ent, pregou: ent && (rel.atividade.participou || rel.atividade.horas > 0), relatorio: rel, situacao: sit };
             }).filter(x => x);
 
-            // --- 4. Processa Órfãos (Fantasmas) ---
+            // Processa Órfãos
             Object.keys(mRels).forEach(id => {
                 if (!idsProc.has(id)) {
                     const rel = mRels[id];
@@ -112,36 +162,20 @@ export default function VisaoGeralRelatorios() {
                         totalPotencial++;
                         novosOrfaos.push({ id, relatorio: rel });
 
-                        // === CORREÇÃO DE HIERARQUIA DE TIPO (FANTASMAS) ===
                         let tipoOrfao = "Publicador";
                         const tRel = rel.atividade?.tipo_pioneiro_mes;
                         const chkAux = rel.atividade?.pioneiro_auxiliar_mes;
+                        if (['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tRel)) tipoOrfao = tRel;
+                        else if (tRel === 'Pioneiro Auxiliar' || chkAux === true) tipoOrfao = "Pioneiro Auxiliar";
 
-                        if (['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tRel)) {
-                            tipoOrfao = tRel; // Prioridade total para Regular
-                        } else if (tRel === 'Pioneiro Auxiliar' || chkAux === true) {
-                            tipoOrfao = "Pioneiro Auxiliar";
-                        }
-                        // ==================================================
-
-                        lista.push({
-                            id,
-                            nome: `(Excluído) ${rel.atividade?.nome_snapshot || "Sem Nome"}`,
-                            grupo: "Outros",
-                            tipo: tipoOrfao,
-                            entregue: true,
-                            pregou: true,
-                            relatorio: rel,
-                            situacao: 'Ativo',
-                            isOrfao: true
-                        });
+                        lista.push({ id, nome: `(Excluído) ${rel.atividade?.nome_snapshot || "Sem Nome"}`, grupo: "Outros", tipo: tipoOrfao, entregue: true, pregou: true, relatorio: rel, situacao: 'Ativo', isOrfao: true });
                     }
                 }
             });
 
             setOrfaos(novosOrfaos); setDados(lista);
 
-            // --- 5. Calcula Totais (Sincronizado com AbaTotaisS1) ---
+            // Calcula Stats
             const stats = { mes: mesReferencia, publicadoresPotenciais: totalPotencial, pubs: { relatorios: 0, horas: 0, estudos: 0 }, aux: { relatorios: 0, horas: 0, estudos: 0 }, reg: { relatorios: 0, horas: 0, estudos: 0 } };
 
             lista.forEach(i => {
@@ -149,7 +183,6 @@ export default function VisaoGeralRelatorios() {
                     const h = Number(i.relatorio.atividade.horas || 0), e = Number(i.relatorio.atividade.estudos || 0);
                     const t = i.tipo;
 
-                    // A classificação agora confia no 'i.tipo' que já foi higienizado acima
                     const isReg = ['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(t);
                     const isAux = t === 'Pioneiro Auxiliar';
 
@@ -157,12 +190,10 @@ export default function VisaoGeralRelatorios() {
                     stats[cat].relatorios++; stats[cat].horas += h; stats[cat].estudos += e;
                 }
             });
-
             const totalRel = stats.pubs.relatorios + stats.aux.relatorios + stats.reg.relatorios;
             if (totalRel > stats.publicadoresPotenciais) stats.publicadoresPotenciais = totalRel;
 
             setStatsS1(stats);
-            if (isAdmin) setDoc(doc(db, "estatisticas_s1", mesReferencia), { ...stats, updatedAt: new Date() }, { merge: true });
 
         } catch (e) { console.error(e); } finally { setLoading(false); }
     };
@@ -170,7 +201,14 @@ export default function VisaoGeralRelatorios() {
     return (
         <div className="p-4 md:p-6 max-w-6xl mx-auto pb-24">
             <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-                <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><FileText className="text-teocratico-blue" /> Relatórios de Campo</h1>
+                <div className="flex items-center gap-2">
+                    <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><FileText className="text-teocratico-blue" /> Relatórios de Campo</h1>
+                    {/* Botão para forçar atualização do cache de publicadores */}
+                    <button onClick={atualizarCache} className="text-gray-400 hover:text-blue-600 p-1" title="Atualizar lista de publicadores">
+                        <RefreshCw size={16} />
+                    </button>
+                </div>
+
                 <div className="flex items-center gap-2 bg-white p-1.5 rounded-lg shadow-sm border border-gray-300 select-none">
                     <button onClick={() => mudarMes(-1)} className="p-1 hover:bg-gray-100 rounded-md text-gray-600 transition"><ChevronLeft size={24} /></button>
                     <div className="relative"><input type="month" value={mesReferencia} onChange={(e) => setMesReferencia(e.target.value)} className="opacity-0 absolute inset-0 w-full cursor-pointer" /><span className="text-gray-800 font-bold text-lg px-2 py-1 block w-32 text-center pointer-events-none">{mesReferencia.split('-').reverse().join('/')}</span></div>
@@ -190,7 +228,7 @@ export default function VisaoGeralRelatorios() {
                 <>
                     {abaAtiva === 'controle' && <AbaControleMensal dados={dados} />}
                     {abaAtiva === 's1' && <AbaTotaisS1 statsS1={statsS1} historicoS1={historicoS1} mesReferencia={mesReferencia} loadingHistorico={loadingHistorico} isAdmin={isAdmin} onRecalculate={carregarHistorico} dados={dados} />}
-                    {abaAtiva === 'importacao' && isAdmin && <AbaImportacao mesReferencia={mesReferencia} listaPublicadores={listaPublicadores} gruposConfig={gruposConfig} onImportSuccess={carregarDadosCompletos} />}
+                    {abaAtiva === 'importacao' && isAdmin && <AbaImportacao mesReferencia={mesReferencia} listaPublicadores={listaPublicadores} gruposConfig={gruposConfig} onImportSuccess={carregarRelatoriosDoMes} />}
                 </>
             )}
         </div>

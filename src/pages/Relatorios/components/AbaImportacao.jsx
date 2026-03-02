@@ -4,8 +4,10 @@ import { Link } from 'react-router-dom';
 import { CloudDownload, Link as LinkIcon, AlertTriangle, Save } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { db } from '../../../config/firebase';
-import { doc, writeBatch, Timestamp } from 'firebase/firestore';
+import { doc, writeBatch, Timestamp, increment, serverTimestamp } from 'firebase/firestore';
 import { buscarRelatoriosCSV } from '../../../utils/importadorService';
+// Importação do Sincronizador de Status
+import { sincronizarSituacaoPublicadoresClient } from '../../../utils/sincronizadorpublicadores';
 
 export default function AbaImportacao({ mesReferencia, listaPublicadores, gruposConfig, onImportSuccess }) {
     const [grupoSelecionado, setGrupoSelecionado] = useState("");
@@ -27,12 +29,12 @@ export default function AbaImportacao({ mesReferencia, listaPublicadores, grupos
                 const match = listaPublicadores.find(p => p.dados_pessoais.nome_completo.toLowerCase() === termo);
                 return {
                     nomeCSV: row.nome,
-                    tipoCSV: row.tipo,
+                    tipoCSV: row.tipo, // Mantém a informação original da planilha
                     matchId: match ? match.id : "",
                     horas: Number(row.horas) || 0,
+                    horasBonus: Number(row.horasBonus) || 0,
                     estudos: Number(row.estudos) || 0,
                     observacoes: row.observacoes || "",
-                    horasBonus: 0,
                     status: match ? "atualizar" : "erro_nome"
                 };
             });
@@ -58,41 +60,111 @@ export default function AbaImportacao({ mesReferencia, listaPublicadores, grupos
         setProcessandoImportacao(true);
         const batch = writeBatch(db);
         let contagem = 0;
+
+        let somaHorasPub = 0, somaEstudosPub = 0, relatoriosPub = 0;
+        let somaHorasAux = 0, somaEstudosAux = 0, relatoriosAux = 0;
+        let somaHorasReg = 0, somaEstudosReg = 0, relatoriosReg = 0;
+
         try {
             for (const item of dadosImportacao) {
                 if (!item.matchId) continue;
                 const publicador = listaPublicadores.find(p => p.id === item.matchId);
                 if (!publicador) continue;
-                
+
                 const idRelatorio = `${mesReferencia}_${item.matchId}`;
                 const relRef = doc(db, "relatorios", idRelatorio);
-                const tipoPioneiro = publicador.dados_eclesiasticos.pioneiro_tipo || "Publicador";
-                const isAuxiliar = tipoPioneiro === "Pioneiro Auxiliar";
-                
+
+                // --- LÓGICA DE IDENTIFICAÇÃO DO TIPO DE PIONEIRO (CORRIGIDA) ---
+                const tipoCadastro = publicador.dados_eclesiasticos.pioneiro_tipo || "Publicador";
+                const tipoPlanilha = String(item.tipoCSV || "").toLowerCase();
+
+                let tipoNoMes = "Publicador";
+                let isAuxiliar = false;
+
+                // Se ele é Regular/Especial no cadastro, ele sempre entra como Regular.
+                if (['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tipoCadastro)) {
+                    tipoNoMes = tipoCadastro;
+                }
+                // Se não for Regular, verificamos o que a planilha informou (Pioneiro Auxiliar / 15h / 30h)
+                else if (tipoPlanilha.includes('auxiliar') || tipoPlanilha.includes('15') || tipoPlanilha.includes('30')) {
+                    tipoNoMes = "Pioneiro Auxiliar";
+                    isAuxiliar = true;
+                }
+                // --- FIM LÓGICA DE TIPO ---
+
+                const horasCampo = Number(item.horas) || 0;
+                const horasBonus = Number(item.horasBonus) || 0;
+                const estudos = Number(item.estudos) || 0;
+
                 const dadosRelatorio = {
                     id_publicador: item.matchId,
                     mes_referencia: mesReferencia,
                     atividade: {
                         participou: true,
-                        horas: Number(item.horas),
-                        estudos: Number(item.estudos),
+                        horas: horasCampo,
+                        bonus_horas: horasBonus,
+                        estudos: estudos,
                         observacoes: item.observacoes,
-                        tipo_pioneiro_mes: tipoPioneiro,
-                        pioneiro_auxiliar_mes: isAuxiliar
+                        tipo_pioneiro_mes: tipoNoMes, // Agora vai salvar corretamente
+                        pioneiro_auxiliar_mes: isAuxiliar // A flag booleana correta
                     },
                     atualizado_em: Timestamp.now(),
                     origem: "importacao_csv"
                 };
+
                 batch.set(relRef, dadosRelatorio, { merge: true });
+
+                // Soma estatísticas
+                if (['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tipoNoMes)) {
+                    somaHorasReg += horasCampo; somaEstudosReg += estudos; relatoriosReg += 1;
+                } else if (isAuxiliar) {
+                    somaHorasAux += horasCampo; somaEstudosAux += estudos; relatoriosAux += 1;
+                } else {
+                    somaHorasPub += horasCampo; somaEstudosPub += estudos; relatoriosPub += 1;
+                }
+
                 contagem++;
             }
+
+            if (contagem > 0) {
+                const statRef = doc(db, "estatisticas_s1", mesReferencia);
+                batch.set(statRef, {
+                    mes: mesReferencia,
+                    pubs: {
+                        horas: increment(somaHorasPub),
+                        estudos: increment(somaEstudosPub),
+                        relatorios: increment(relatoriosPub)
+                    },
+                    aux: {
+                        horas: increment(somaHorasAux),
+                        estudos: increment(somaEstudosAux),
+                        relatorios: increment(relatoriosAux)
+                    },
+                    reg: {
+                        horas: increment(somaHorasReg),
+                        estudos: increment(somaEstudosReg),
+                        relatorios: increment(relatoriosReg)
+                    },
+                    updatedAt: serverTimestamp()
+                }, { merge: true });
+            }
+
             await batch.commit();
-            toast.success(`${contagem} relatórios importados.`);
+
+            toast.loading("Analisando e atualizando status dos publicadores...", { id: "sync_import" });
+            try {
+                await sincronizarSituacaoPublicadoresClient();
+                toast.success(`${contagem} relatórios importados e Status atualizados!`, { id: "sync_import" });
+            } catch (syncError) {
+                console.error("Erro ao sincronizar status:", syncError);
+                toast.error("Importado, mas o status manual precisa ser atualizado na barra.", { id: "sync_import" });
+            }
+
             setDadosImportacao([]);
             if (onImportSuccess) onImportSuccess();
         } catch (error) {
             console.error(error);
-            toast.error("Erro ao salvar.");
+            toast.error("Erro ao salvar importação.");
         } finally {
             setProcessandoImportacao(false);
         }
@@ -136,6 +208,7 @@ export default function AbaImportacao({ mesReferencia, listaPublicadores, grupos
                                     <th className="px-6 py-3">Nome (Planilha)</th>
                                     <th className="px-6 py-3">Sistema (Match)</th>
                                     <th className="px-6 py-3 text-center">Horas</th>
+                                    <th className="px-6 py-3 text-center text-blue-600" title="Extraído de LDC/Projetos">Bônus</th>
                                     <th className="px-6 py-3 text-center">Estudos</th>
                                     <th className="px-6 py-3">Obs</th>
                                     <th className="px-6 py-3 text-center">Ação</th>
@@ -144,7 +217,7 @@ export default function AbaImportacao({ mesReferencia, listaPublicadores, grupos
                             <tbody className="divide-y divide-gray-100">
                                 {dadosImportacao.map((row, idx) => (
                                     <tr key={idx} className={`hover:bg-opacity-50 transition ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} ${row.status === 'erro_nome' ? 'bg-red-50 hover:bg-red-50' : ''}`}>
-                                        <td className="px-6 py-3 font-mono text-gray-500 text-xs">{row.nomeCSV}<div className="text-[10px] text-gray-400">{row.tipoCSV}</div></td>
+                                        <td className="px-6 py-3 font-mono text-gray-500 text-xs">{row.nomeCSV}<div className="text-[10px] text-gray-400 font-bold">{row.tipoCSV}</div></td>
                                         <td className="px-6 py-3">
                                             <select value={row.matchId || ""} onChange={(e) => atualizarItemImportacao(idx, 'matchId', e.target.value)} className={`w-full text-sm border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 p-1.5 ${!row.matchId ? 'border-red-300 bg-red-50 text-red-700 font-bold' : 'border-gray-300 bg-white'}`}>
                                                 <option value="">-- Selecione ou Ignore --</option>
@@ -152,6 +225,7 @@ export default function AbaImportacao({ mesReferencia, listaPublicadores, grupos
                                             </select>
                                         </td>
                                         <td className="px-6 py-3 text-center"><input type="number" value={row.horas} onChange={(e) => atualizarItemImportacao(idx, 'horas', Number(e.target.value))} className="w-16 text-center border border-gray-300 rounded-md p-1 text-sm focus:ring-blue-500 focus:border-blue-500" /></td>
+                                        <td className="px-6 py-3 text-center"><input type="number" value={row.horasBonus} onChange={(e) => atualizarItemImportacao(idx, 'horasBonus', Number(e.target.value))} className="w-16 text-center border border-blue-300 bg-blue-50 rounded-md p-1 text-sm focus:ring-blue-500 focus:border-blue-500" /></td>
                                         <td className="px-6 py-3 text-center"><input type="number" value={row.estudos} onChange={(e) => atualizarItemImportacao(idx, 'estudos', Number(e.target.value))} className="w-14 text-center border border-gray-300 rounded-md p-1 text-sm focus:ring-blue-500 focus:border-blue-500" /></td>
                                         <td className="px-6 py-3"><input type="text" value={row.observacoes} onChange={(e) => atualizarItemImportacao(idx, 'observacoes', e.target.value)} className="w-full min-w-[150px] border border-gray-300 rounded-md p-1 text-xs focus:ring-blue-500 focus:border-blue-500" /></td>
                                         <td className="px-6 py-3 text-center">{row.status === 'atualizar' && <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded font-bold">Atualizar</span>}{row.status === 'erro_nome' && <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded font-bold">Corrigir</span>}</td>

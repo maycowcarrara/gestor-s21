@@ -18,7 +18,6 @@ import { normalizarSituacao } from '../../utils/normalizadores';
 
 export default function DetalhesPublicador() {
     const { isAdmin } = useAuth();
-
     const { id } = useParams();
     const navigate = useNavigate();
 
@@ -54,10 +53,10 @@ export default function DetalhesPublicador() {
         const ano = parseInt(anoStr, 10);
         const mes = parseInt(mesStr, 10);
         if (Number.isNaN(ano) || Number.isNaN(mes)) return null;
-        return mes >= 9 ? ano + 1 : ano; // setembro em diante pertence ao ano de serviço seguinte
+        return mes >= 9 ? ano + 1 : ano; 
     };
 
-    // Normaliza publicador SEM depender de estar “100% novo” ou “100% legado”
+    // Normaliza publicador
     const normalizarPublicador = (raw) => {
         const nome = firstDefined(raw, ['dados_pessoais.nome_completo', 'dadospessoais.nomecompleto']) || '';
         const genero = firstDefined(raw, ['dados_pessoais.genero', 'dadospessoais.genero']) || 'Masculino';
@@ -99,15 +98,19 @@ export default function DetalhesPublicador() {
             ]) || null
         };
 
-        const privilegiosRaw =
-            firstDefined(raw, ['dados_eclesiasticos.privilegios', 'dadoseclesiasticos.privilegios']) || [];
-
-        const privilegios =
-            Array.isArray(privilegiosRaw)
+        const privilegiosRaw = firstDefined(raw, ['dados_eclesiasticos.privilegios', 'dadoseclesiasticos.privilegios']) || [];
+        const privilegios = Array.isArray(privilegiosRaw)
                 ? privilegiosRaw
                 : (typeof privilegiosRaw === 'string' && privilegiosRaw.trim() ? [privilegiosRaw.trim()] : []);
 
         const situacaoRaw = firstDefined(raw, ['dados_eclesiasticos.situacao', 'dadoseclesiasticos.situacao']) || 'Ativo';
+        const regularidadeRaw = firstDefined(raw, ['dados_eclesiasticos.regularidade', 'dadoseclesiasticos.regularidade']) || 'Regular';
+
+        // Garante que o Irregular prevaleça sobre o "Ativo" visualmente no Front-end
+        let situacaoFinal = normalizarSituacao(situacaoRaw);
+        if (situacaoFinal === 'Ativo' && regularidadeRaw === 'Irregular') {
+            situacaoFinal = 'Irregular';
+        }
 
         return {
             ...raw,
@@ -121,13 +124,12 @@ export default function DetalhesPublicador() {
                     uf
                 },
                 contatos,
-                // fallback extra (alguns legados usavam campos soltos)
                 celular: firstDefined(raw, ['dadospessoais.celular']) || null,
                 telefone: firstDefined(raw, ['dadospessoais.telefone']) || null,
                 email: firstDefined(raw, ['dadospessoais.email']) || null
             },
             dados_eclesiasticos: {
-                situacao: normalizarSituacao(situacaoRaw),
+                situacao: situacaoFinal, // <--- Aqui está a mágica visual
                 grupo_campo: firstDefined(raw, ['dados_eclesiasticos.grupo_campo', 'dadoseclesiasticos.grupocampo']) || 'Sem Grupo',
                 privilegios,
                 pioneiro_tipo: firstDefined(raw, ['dados_eclesiasticos.pioneiro_tipo', 'dadoseclesiasticos.pioneirotipo']) || null,
@@ -141,12 +143,8 @@ export default function DetalhesPublicador() {
 
     const normalizarRelatorio = (docSnap) => {
         const data = docSnap.data() || {};
-
         const mesRef = firstDefined(data, ['mesreferencia', 'mes_referencia']);
-        const anoServico =
-            firstDefined(data, ['anoservico', 'ano_servico']) ??
-            calcAnoServicoFromMesRef(mesRef);
-
+        const anoServico = firstDefined(data, ['anoservico', 'ano_servico']) ?? calcAnoServicoFromMesRef(mesRef);
         const atividade = data.atividade || {};
 
         const tipoServico = firstDefined(atividade, ['tipopioneiromes', 'tipo_pioneiro_mes']);
@@ -161,30 +159,25 @@ export default function DetalhesPublicador() {
             __docId: docSnap.id,
             id: docSnap.id,
             ...data,
-
             idpublicador: firstDefined(data, ['idpublicador', 'id_publicador']),
             anoservico: anoServico,
             mesreferencia: mesRef,
 
-            // aliases underscore (para telas antigas)
+            // aliases underscore
             id_publicador: firstDefined(data, ['id_publicador', 'idpublicador']),
             ano_servico: anoServico,
             mes_referencia: mesRef,
 
             atividade: {
                 ...atividade,
-
                 participou,
                 horas,
                 estudos,
                 observacoes: atividade?.observacoes || '',
-
-                // oficiais
                 tipopioneiromes: tipoServico,
                 bonushoras: bonusHoras,
                 pioneiroauxiliarmes: pioneiroAux,
 
-                // aliases underscore
                 tipo_pioneiro_mes: tipoServico,
                 bonus_horas: bonusHoras,
                 pioneiro_auxiliar_mes: pioneiroAux
@@ -192,7 +185,6 @@ export default function DetalhesPublicador() {
         };
     };
 
-    // --- CÁLCULO DINÂMICO DO ANO DE SERVIÇO ---
     const getAnoServicoAtual = () => {
         const hoje = new Date();
         return hoje.getMonth() >= 8 ? hoje.getFullYear() + 1 : hoje.getFullYear();
@@ -210,7 +202,6 @@ export default function DetalhesPublicador() {
     const carregarDados = async () => {
         setLoading(true);
         try {
-            // Publicador
             const docRef = doc(db, 'publicadores', id);
             const docSnap = await getDoc(docRef);
 
@@ -224,8 +215,6 @@ export default function DetalhesPublicador() {
             const pubNormalizado = normalizarPublicador({ id: docSnap.id, ...docSnap.data() });
             setPublicador(pubNormalizado);
 
-            // Relatórios: NÃO use try/catch (a query não “falha” se estiver vazio).
-            // Busca os dois campos e mescla.
             const colRef = collection(db, 'relatorios');
             const [snapNovo, snapLegado] = await Promise.all([
                 getDocs(query(colRef, where('idpublicador', '==', id))),
@@ -328,7 +317,7 @@ export default function DetalhesPublicador() {
     const emergenciaNome = contatos.emergencia_nome || dp.emergencia_nome || publicador.contato_emergencia?.nome;
     const emergenciaTel = contatos.emergencia_tel || dp.emergencia_tel || publicador.contato_emergencia?.telefone;
 
-    const situacaoExibicao = normalizarSituacao(publicador?.dados_eclesiasticos?.situacao || 'Ativo');
+    const situacaoExibicao = publicador?.dados_eclesiasticos?.situacao || 'Ativo';
 
     let enderecoExibicao = 'Sem endereço';
     if (dp.endereco) {
@@ -341,6 +330,7 @@ export default function DetalhesPublicador() {
 
     const statusColor = {
         'Ativo': 'bg-green-100 text-green-700',
+        'Irregular': 'bg-yellow-100 text-yellow-700',
         'Inativo': 'bg-orange-100 text-orange-700',
         'Removido': 'bg-red-100 text-red-700 border-red-200 border',
         'Excluído': 'bg-gray-200 text-gray-700 border-gray-300 border'
@@ -441,7 +431,7 @@ export default function DetalhesPublicador() {
                     {isAdmin && (
                         <button
                             onClick={() => abrirModalLancamento(null)}
-                            className="w-full md:w-auto bg-teocratico-blue text-white px-4 py-3 md:py-2 rounded-lg flex items-center justify-center gap-2 hover:bg-blue-700 transition shadow-sm text-sm font-medium"
+                            className="w-full md:w-auto bg-teocratico-blue text-white px-4 py-3 md:py-2 rounded-lg flex items-center justify-center gap-2 hover:bg-blue-700 transition shadow-sm text-sm font-medium mt-4 md:mt-0"
                         >
                             <PlusCircle size={18} /> Lançar Relatório
                         </button>

@@ -20,7 +20,14 @@ export default function ListaPublicadores() {
     const [loading, setLoading] = useState(true);
     const [busca, setBusca] = useState("");
     const [listaGrupos, setListaGrupos] = useState([]);
-    const [mostrarFiltros, setMostrarFiltros] = useState(true);
+    
+    // ALTERAÇÃO: Inicia fechado se for celular (largura < 768px), aberto se for desktop
+    const [mostrarFiltros, setMostrarFiltros] = useState(() => {
+        if (typeof window !== 'undefined') {
+            return window.innerWidth >= 768;
+        }
+        return true;
+    });
 
     // --- PERSISTÊNCIA DE VISUALIZAÇÃO ---
     const [modoVisualizacao, setModoVisualizacao] = useState(() => {
@@ -38,10 +45,7 @@ export default function ListaPublicadores() {
     const [filtroPrivilegio, setFiltroPrivilegio] = useState("todos");
     const [filtroFaixa, setFiltroFaixa] = useState("todos");
     const [filtroGrupo, setFiltroGrupo] = useState("todos");
-
-    // ALTERADO: Padrão agora mostra a lista "limpa" (sem excluídos)
     const [filtroSituacao, setFiltroSituacao] = useState("Geral");
-
     const [filtroGenero, setFiltroGenero] = useState("todos");
     const [filtroBatismo, setFiltroBatismo] = useState("todos");
 
@@ -71,7 +75,6 @@ export default function ListaPublicadores() {
         if (s === 'inativo') return 'Inativo';
         if (s === 'removido') return 'Removido';
 
-        // compat: Excludo (legado), Excluido (sem acento), Excluído (correto)
         if (s === 'excludo' || s === 'excluido' || s === 'excluído') return 'Excluído';
 
         return 'Ativo';
@@ -86,63 +89,21 @@ export default function ListaPublicadores() {
         return [];
     };
 
-    // Converte doc legado -> formato que sua tela já espera (dados_pessoais / dados_eclesiasticos)
     const normalizarPublicador = (raw, id) => {
-        const nome = firstDefined(raw, [
-            'dados_pessoais.nome_completo',
-            'dadospessoais.nomecompleto'
-        ]) || 'Sem nome';
-
-        const genero = firstDefined(raw, [
-            'dados_pessoais.genero',
-            'dadospessoais.genero'
-        ]) || 'Masculino';
-
-        const dataNascimento = firstDefined(raw, [
-            'dados_pessoais.data_nascimento',
-            'dadospessoais.datanascimento'
-        ]) || null;
-
-        const outraLingua = firstDefined(raw, [
-            'dados_pessoais.outra_lingua',
-            'dadospessoais.outralingua'
-        ]) || null;
-
-        const necessidadeEspecial = firstDefined(raw, [
-            'dados_pessoais.necessidade_especial',
-            'dadospessoais.necessidadeespecial'
-        ]) || null;
-
-        const situacaoRaw = firstDefined(raw, [
-            'dados_eclesiasticos.situacao',
-            'dadoseclesiasticos.situacao'
-        ]) || 'Ativo';
-
-        const grupoCampo = firstDefined(raw, [
-            'dados_eclesiasticos.grupo_campo',
-            'dadoseclesiasticos.grupocampo'
-        ]) || 'Sem Grupo';
-
-        const pioneiroTipo = firstDefined(raw, [
-            'dados_eclesiasticos.pioneiro_tipo',
-            'dadoseclesiasticos.pioneirotipo'
-        ]) || null;
-
-        const batizado = firstDefined(raw, [
-            'dados_eclesiasticos.batizado',
-            'dadoseclesiasticos.batizado'
-        ]);
-
-        const privRaw = firstDefined(raw, [
-            'dados_eclesiasticos.privilegios',
-            'dadoseclesiasticos.privilegios'
-        ]);
+        const nome = firstDefined(raw, ['dados_pessoais.nome_completo', 'dadospessoais.nomecompleto']) || 'Sem nome';
+        const genero = firstDefined(raw, ['dados_pessoais.genero', 'dadospessoais.genero']) || 'Masculino';
+        const dataNascimento = firstDefined(raw, ['dados_pessoais.data_nascimento', 'dadospessoais.datanascimento']) || null;
+        const outraLingua = firstDefined(raw, ['dados_pessoais.outra_lingua', 'dadospessoais.outralingua']) || null;
+        const necessidadeEspecial = firstDefined(raw, ['dados_pessoais.necessidade_especial', 'dadospessoais.necessidadeespecial']) || null;
+        const situacaoRaw = firstDefined(raw, ['dados_eclesiasticos.situacao', 'dadoseclesiasticos.situacao']) || 'Ativo';
+        const grupoCampo = firstDefined(raw, ['dados_eclesiasticos.grupo_campo', 'dadoseclesiasticos.grupocampo']) || 'Sem Grupo';
+        const pioneiroTipo = firstDefined(raw, ['dados_eclesiasticos.pioneiro_tipo', 'dadoseclesiasticos.pioneirotipo']) || null;
+        const batizado = firstDefined(raw, ['dados_eclesiasticos.batizado', 'dadoseclesiasticos.batizado']);
+        const privRaw = firstDefined(raw, ['dados_eclesiasticos.privilegios', 'dadoseclesiasticos.privilegios']);
 
         return {
             id,
-            // mantém o bruto para debug se precisar
             _raw: raw,
-
             dados_pessoais: {
                 nome_completo: String(nome),
                 genero: genero ?? null,
@@ -150,7 +111,6 @@ export default function ListaPublicadores() {
                 outra_lingua: outraLingua ?? null,
                 necessidade_especial: necessidadeEspecial ?? null
             },
-
             dados_eclesiasticos: {
                 situacao: normalizarSituacao(situacaoRaw),
                 grupo_campo: String(grupoCampo || 'Sem Grupo'),
@@ -164,7 +124,6 @@ export default function ListaPublicadores() {
     useEffect(() => {
         carregarPublicadores();
         carregarConfigGrupos();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const carregarConfigGrupos = async () => {
@@ -182,19 +141,14 @@ export default function ListaPublicadores() {
     const carregarPublicadores = async () => {
         setLoading(true);
         try {
-            // Caminho mais seguro: sem orderBy (evita dependência de schema/índice e quebra por campo inexistente)
             const snap = await getDocs(collection(db, "publicadores"));
-
             const lista = snap.docs.map(d => normalizarPublicador(d.data(), d.id));
-
-            // Ordenação segura no frontend (nome sempre existe após normalizar)
             lista.sort((a, b) =>
                 (a.dados_pessoais.nome_completo || '').localeCompare(
                     (b.dados_pessoais.nome_completo || ''),
                     'pt-BR'
                 )
             );
-
             setPublicadores(lista);
         } catch (error) {
             console.error("Erro ao buscar:", error);
@@ -215,10 +169,7 @@ export default function ListaPublicadores() {
     const publicadoresFiltrados = publicadores.filter(pub => {
         const situacao = pub?.dados_eclesiasticos?.situacao || "Ativo";
 
-        // LÓGICA DO FILTRO DE SITUAÇÃO
         if (filtroSituacao === 'Geral') {
-            // "Geral" = Mostra Ativos, Inativos, Removidos e Irregulares.
-            // ESCONDE Excluídos.
             if (situacao === 'Excluído') return false;
         } else {
             if (situacao !== filtroSituacao) return false;
@@ -315,8 +266,6 @@ export default function ListaPublicadores() {
         filtroBatismo !== "todos" ||
         busca !== "";
 
-    // --- FUNÇÃO DE COR PARA GRUPO ---
-    // Gera uma cor pastel baseada no nome do grupo (para consistência visual)
     const getGroupColor = (name) => {
         const colors = [
             'bg-blue-50 border-blue-100 text-blue-800',
@@ -333,16 +282,12 @@ export default function ListaPublicadores() {
         return colors[Math.abs(hash) % colors.length];
     };
 
-    // --- COMPONENTE INTERNO DO CARD (Reutilizável) ---
     const PublicadorCard = ({ pub }) => {
         const faixaEtaria = calcularFaixaEtaria(pub?.dados_pessoais?.data_nascimento);
-
-        // Verifica se tem etiquetas extras
         const temOutraLingua = pub?.dados_pessoais?.outra_lingua && pub?.dados_pessoais?.outra_lingua !== "Não";
         const temNecessidade = pub?.dados_pessoais?.necessidade_especial;
         const genero = pub?.dados_pessoais?.genero;
 
-        // Fundo sutil baseado no gênero
         const bgGenero = genero === 'Masculino'
             ? 'bg-blue-50/30 hover:bg-blue-50/80 border-blue-100/50'
             : 'bg-pink-50/30 hover:bg-pink-50/80 border-pink-100/50';
@@ -353,7 +298,6 @@ export default function ListaPublicadores() {
                 className={`block rounded-lg border transition-all p-3 group h-full ${bgGenero} ${modoVisualizacao === 'lista' ? 'flex items-center justify-between' : 'flex flex-col'}`}
             >
                 <div className={`flex items-center gap-3 w-full ${modoVisualizacao === 'grade' ? 'mb-3' : ''}`}>
-                    {/* Avatar */}
                     <div
                         className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-sm shrink-0 
                             ${genero === 'Masculino' ? 'bg-teocratico-blue' : 'bg-pink-400'}`}
@@ -366,7 +310,6 @@ export default function ListaPublicadores() {
                             <p className="font-bold text-gray-800 text-sm truncate group-hover:text-blue-700 transition-colors">
                                 {pub?.dados_pessoais?.nome_completo || 'Sem nome'}
                             </p>
-
                             {pub?.dados_eclesiasticos?.situacao !== 'Ativo' && (
                                 <span
                                     className={`text-[10px] px-1.5 rounded border font-bold shrink-0 ${pub?.dados_eclesiasticos?.situacao === 'Inativo'
@@ -379,7 +322,6 @@ export default function ListaPublicadores() {
                             )}
                         </div>
 
-                        {/* Etiquetas de Acessibilidade / Idioma */}
                         <div className="flex gap-1.5">
                             {temOutraLingua && (
                                 <span
@@ -389,7 +331,6 @@ export default function ListaPublicadores() {
                                     <Globe size={10} /> <span className="hidden sm:inline truncate max-w-[60px]">{pub?.dados_pessoais?.outra_lingua}</span>
                                 </span>
                             )}
-
                             {temNecessidade && (
                                 <span
                                     title="Necessidade Especial"
@@ -402,20 +343,17 @@ export default function ListaPublicadores() {
                     </div>
                 </div>
 
-                {/* Tags de Status e Privilégios */}
                 <div className={`flex flex-wrap gap-1.5 items-center ${modoVisualizacao === 'lista' ? 'justify-end' : 'mt-auto'}`}>
                     {faixaEtaria && (
                         <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${faixaEtaria.cor}`}>
                             {faixaEtaria.label}
                         </span>
                     )}
-
                     {!pub?.dados_eclesiasticos?.batizado && (
                         <span className="text-[10px] bg-cyan-50 text-cyan-700 px-1.5 py-0.5 rounded border border-cyan-100 font-medium flex items-center gap-1">
                             <Droplets size={8} /> <span className="hidden sm:inline">Não Batizado</span>
                         </span>
                     )}
-
                     {(pub?.dados_eclesiasticos?.privilegios || []).map(priv => {
                         let styleClass = "bg-indigo-50 text-indigo-700 border-indigo-100";
                         let Icon = Shield;
@@ -501,11 +439,15 @@ export default function ListaPublicadores() {
                         </button>
                     </div>
 
+                    {/* ALTERAÇÃO: Removido o md:hidden para que o botão de Filtros apareça no Desktop também */}
                     <button
                         onClick={() => setMostrarFiltros(!mostrarFiltros)}
-                        className="md:hidden bg-white border border-gray-300 px-3 py-2 rounded-lg text-gray-700 flex items-center gap-2 font-medium text-sm"
+                        className={`bg-white border px-3 py-2 rounded-lg flex items-center gap-2 font-medium text-sm transition-colors ${
+                            mostrarFiltros ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                        }`}
+                        title={mostrarFiltros ? "Ocultar Filtros" : "Mostrar Filtros"}
                     >
-                        <Filter size={16} /> Filtros
+                        <Filter size={16} /> Filtros {temFiltroAtivo && !mostrarFiltros && <span className="w-2 h-2 rounded-full bg-red-500"></span>}
                     </button>
 
                     {isAdmin && (
@@ -520,7 +462,8 @@ export default function ListaPublicadores() {
             </div>
 
             {/* PAINEL DE CONTROLE (BUSCA + FILTROS) */}
-            <div className={`bg-gray-50 p-4 rounded-xl mb-6 border border-gray-200 shadow-sm ${mostrarFiltros ? 'block' : 'hidden md:block'}`}>
+            {/* ALTERAÇÃO: Removido o hidden md:block para respeitar a variável `mostrarFiltros` em todas as telas */}
+            <div className={`bg-gray-50 p-4 rounded-xl mb-6 border border-gray-200 shadow-sm transition-all duration-300 ${mostrarFiltros ? 'block' : 'hidden'}`}>
                 {/* LINHA 1 */}
                 <div className="flex flex-col md:flex-row gap-4 mb-4">
                     <div className="relative flex-1">
@@ -535,7 +478,6 @@ export default function ListaPublicadores() {
                     </div>
 
                     <div className="bg-white p-1 rounded-lg border border-gray-200 flex shrink-0 overflow-x-auto items-center">
-                        {/* BOTÃO "GERAL" (TODOS MENOS EXCLUÍDOS) */}
                         <button
                             onClick={() => setFiltroSituacao('Geral')}
                             className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1 ${filtroSituacao === 'Geral' ? 'bg-gray-800 text-white shadow-sm ring-1 ring-gray-900' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
@@ -562,7 +504,6 @@ export default function ListaPublicadores() {
                             );
                         })}
 
-                        {/* EXCLUÍDO SEPARADO/APAGADO */}
                         <div className="w-px h-4 bg-gray-200 mx-1"></div>
                         <button
                             onClick={() => setFiltroSituacao('Excluído')}
@@ -601,7 +542,6 @@ export default function ListaPublicadores() {
                             onClick={() => setFiltroTipo(filtroTipo === 'pioneiro_regular' ? 'todos' : 'pioneiro_regular')}
                             color="blue"
                         />
-
                         <TagFilter
                             label="Ancião"
                             icon={Shield}
@@ -609,7 +549,6 @@ export default function ListaPublicadores() {
                             onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'anciao' ? 'todos' : 'anciao')}
                             color="indigo"
                         />
-
                         <TagFilter
                             label="Servo Min."
                             icon={Shield}
@@ -617,7 +556,6 @@ export default function ListaPublicadores() {
                             onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'servo' ? 'todos' : 'servo')}
                             color="indigo"
                         />
-
                         <TagFilter
                             label="Varão Hab."
                             icon={CheckCircle}
@@ -638,7 +576,6 @@ export default function ListaPublicadores() {
                             onClick={() => setFiltroGenero(filtroGenero === 'Masculino' ? 'todos' : 'Masculino')}
                             color="cyan"
                         />
-
                         <TagFilter
                             label="Mulher"
                             icon={User}
@@ -666,7 +603,6 @@ export default function ListaPublicadores() {
                             onClick={() => setFiltroFaixa(filtroFaixa === 'crianca' ? 'todos' : 'crianca')}
                             color="pink"
                         />
-
                         <TagFilter
                             label="Jovem"
                             icon={UserCheck}
@@ -674,7 +610,6 @@ export default function ListaPublicadores() {
                             onClick={() => setFiltroFaixa(filtroFaixa === 'jovem' ? 'todos' : 'jovem')}
                             color="purple"
                         />
-
                         <TagFilter
                             label="Adulto"
                             icon={User}
@@ -682,7 +617,6 @@ export default function ListaPublicadores() {
                             onClick={() => setFiltroFaixa(filtroFaixa === 'adulto' ? 'todos' : 'adulto')}
                             color="blue"
                         />
-
                         <TagFilter
                             label="Idoso"
                             icon={Glasses}
@@ -711,13 +645,10 @@ export default function ListaPublicadores() {
                     {nomesGrupos.map(grupo => {
                         const isExpanded = gruposExpandidos[grupo] !== false;
                         const lista = grupos[grupo];
-
-                        // COR DINÂMICA DO GRUPO
                         const groupHeaderClass = getGroupColor(grupo);
 
                         return (
                             <div key={grupo} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden animate-fadeIn">
-                                {/* CABEÇALHO DO GRUPO */}
                                 <div
                                     onClick={() => toggleGrupo(grupo)}
                                     className={`${groupHeaderClass} px-4 py-3 border-b border-gray-100 flex justify-between items-center cursor-pointer transition select-none`}
@@ -731,7 +662,6 @@ export default function ListaPublicadores() {
                                     </div>
                                 </div>
 
-                                {/* CORPO DO GRUPO (GRID OU LISTA) */}
                                 {isExpanded && (
                                     <div className={`p-2 md:p-0 ${modoVisualizacao === 'grade' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 p-3' : 'divide-y divide-gray-100'}`}>
                                         {lista.map(pub => (
