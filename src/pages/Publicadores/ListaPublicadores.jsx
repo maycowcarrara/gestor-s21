@@ -20,7 +20,7 @@ export default function ListaPublicadores() {
     const [loading, setLoading] = useState(true);
     const [busca, setBusca] = useState("");
     const [listaGrupos, setListaGrupos] = useState([]);
-    
+
     // ALTERAÇÃO: Inicia fechado se for celular (largura < 768px), aberto se for desktop
     const [mostrarFiltros, setMostrarFiltros] = useState(() => {
         if (typeof window !== 'undefined') {
@@ -96,6 +96,10 @@ export default function ListaPublicadores() {
         const outraLingua = firstDefined(raw, ['dados_pessoais.outra_lingua', 'dadospessoais.outralingua']) || null;
         const necessidadeEspecial = firstDefined(raw, ['dados_pessoais.necessidade_especial', 'dadospessoais.necessidadeespecial']) || null;
         const situacaoRaw = firstDefined(raw, ['dados_eclesiasticos.situacao', 'dadoseclesiasticos.situacao']) || 'Ativo';
+
+        // 🚀 LENDO A REGULARIDADE
+        const regularidadeRaw = firstDefined(raw, ['dados_eclesiasticos.regularidade', 'dadoseclesiasticos.regularidade']) || 'Regular';
+
         const grupoCampo = firstDefined(raw, ['dados_eclesiasticos.grupo_campo', 'dadoseclesiasticos.grupocampo']) || 'Sem Grupo';
         const pioneiroTipo = firstDefined(raw, ['dados_eclesiasticos.pioneiro_tipo', 'dadoseclesiasticos.pioneirotipo']) || null;
         const batizado = firstDefined(raw, ['dados_eclesiasticos.batizado', 'dadoseclesiasticos.batizado']);
@@ -113,6 +117,7 @@ export default function ListaPublicadores() {
             },
             dados_eclesiasticos: {
                 situacao: normalizarSituacao(situacaoRaw),
+                regularidade: String(regularidadeRaw), // <- Salvando na normalização
                 grupo_campo: String(grupoCampo || 'Sem Grupo'),
                 pioneiro_tipo: pioneiroTipo ?? null,
                 batizado: !!batizado,
@@ -168,9 +173,18 @@ export default function ListaPublicadores() {
     // --- LÓGICA DE FILTRAGEM ---
     const publicadoresFiltrados = publicadores.filter(pub => {
         const situacao = pub?.dados_eclesiasticos?.situacao || "Ativo";
+        const regularidade = pub?.dados_eclesiasticos?.regularidade || "Regular";
 
+        // 🚀 FILTRO ATUALIZADO PARA CONSIDERAR IRREGULARES
         if (filtroSituacao === 'Geral') {
             if (situacao === 'Excluído') return false;
+        } else if (filtroSituacao === 'Irregular') {
+            // 🚀 CORREÇÃO: Filtra apenas quem é 'Ativo' na congregação e está 'Irregular'
+            // Impede que os 'Inativos' apareçam aqui, pois eles já têm o próprio filtro.
+            if (situacao !== 'Ativo' || regularidade !== 'Irregular') return false;
+        } else if (filtroSituacao === 'Ativo') {
+            // Se escolheu 'Ativo', mostra os ativos, mas esconde os que estão Irregulares 
+            if (situacao !== 'Ativo' || regularidade === 'Irregular') return false;
         } else {
             if (situacao !== filtroSituacao) return false;
         }
@@ -310,14 +324,23 @@ export default function ListaPublicadores() {
                             <p className="font-bold text-gray-800 text-sm truncate group-hover:text-blue-700 transition-colors">
                                 {pub?.dados_pessoais?.nome_completo || 'Sem nome'}
                             </p>
+
+                            {/* TAGS DE SITUAÇÃO E REGULARIDADE */}
                             {pub?.dados_eclesiasticos?.situacao !== 'Ativo' && (
                                 <span
                                     className={`text-[10px] px-1.5 rounded border font-bold shrink-0 ${pub?.dados_eclesiasticos?.situacao === 'Inativo'
-                                            ? 'bg-orange-50 text-orange-600 border-orange-100'
-                                            : 'bg-red-50 text-red-600 border-red-100'
+                                        ? 'bg-orange-50 text-orange-600 border-orange-100'
+                                        : 'bg-red-50 text-red-600 border-red-100'
                                         }`}
                                 >
                                     {pub?.dados_eclesiasticos?.situacao}
+                                </span>
+                            )}
+
+                            {/* 🚀 TAG AMARELA DE IRREGULAR */}
+                            {pub?.dados_eclesiasticos?.regularidade === 'Irregular' && pub?.dados_eclesiasticos?.situacao === 'Ativo' && (
+                                <span className="text-[10px] px-1.5 rounded border font-bold shrink-0 bg-yellow-50 text-yellow-700 border-yellow-200">
+                                    Irregular
                                 </span>
                             )}
                         </div>
@@ -439,12 +462,10 @@ export default function ListaPublicadores() {
                         </button>
                     </div>
 
-                    {/* ALTERAÇÃO: Removido o md:hidden para que o botão de Filtros apareça no Desktop também */}
                     <button
                         onClick={() => setMostrarFiltros(!mostrarFiltros)}
-                        className={`bg-white border px-3 py-2 rounded-lg flex items-center gap-2 font-medium text-sm transition-colors ${
-                            mostrarFiltros ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                        }`}
+                        className={`bg-white border px-3 py-2 rounded-lg flex items-center gap-2 font-medium text-sm transition-colors ${mostrarFiltros ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                            }`}
                         title={mostrarFiltros ? "Ocultar Filtros" : "Mostrar Filtros"}
                     >
                         <Filter size={16} /> Filtros {temFiltroAtivo && !mostrarFiltros && <span className="w-2 h-2 rounded-full bg-red-500"></span>}
@@ -462,7 +483,6 @@ export default function ListaPublicadores() {
             </div>
 
             {/* PAINEL DE CONTROLE (BUSCA + FILTROS) */}
-            {/* ALTERAÇÃO: Removido o hidden md:block para respeitar a variável `mostrarFiltros` em todas as telas */}
             <div className={`bg-gray-50 p-4 rounded-xl mb-6 border border-gray-200 shadow-sm transition-all duration-300 ${mostrarFiltros ? 'block' : 'hidden'}`}>
                 {/* LINHA 1 */}
                 <div className="flex flex-col md:flex-row gap-4 mb-4">
@@ -487,9 +507,11 @@ export default function ListaPublicadores() {
 
                         <div className="w-px h-4 bg-gray-200 mx-1"></div>
 
-                        {['Ativo', 'Inativo', 'Removido'].map((sit) => {
+                        {/* 🚀 ARRAY ATUALIZADO COM 'Irregular' */}
+                        {['Ativo', 'Irregular', 'Inativo', 'Removido'].map((sit) => {
                             let activeClass = "";
                             if (sit === 'Ativo') activeClass = 'bg-green-100 text-green-700 shadow-sm ring-1 ring-green-200';
+                            else if (sit === 'Irregular') activeClass = 'bg-yellow-100 text-yellow-700 shadow-sm ring-1 ring-yellow-200';
                             else if (sit === 'Inativo') activeClass = 'bg-orange-100 text-orange-700 shadow-sm ring-1 ring-orange-200';
                             else if (sit === 'Removido') activeClass = 'bg-red-100 text-red-700 shadow-sm ring-1 ring-red-200';
 

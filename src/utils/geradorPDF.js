@@ -10,28 +10,49 @@ const limparTexto = (texto) => {
     return texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
 };
 
+// Busca os dados em pub._raw (versão completa do banco) 
 const getContatos = (pub) => {
-    const dp = pub.dados_pessoais || {};
+    const raw = pub._raw || pub; // Se veio da tela de lista, usa o _raw. Se não, usa o próprio pub.
+    const dp = raw.dados_pessoais || raw.dadospessoais || {};
     const contatos = dp.contatos || {};
+
     return {
         celular: contatos.celular || dp.celular || dp.telefone || '-',
         email: contatos.email || dp.email || '-',
-        emergencia_nome: contatos.emergencia_nome || dp.emergencia_nome || (pub.contato_emergencia?.nome) || '-',
-        emergencia_tel: contatos.emergencia_tel || dp.emergencia_tel || (pub.contato_emergencia?.telefone) || '-'
+        emergencia_nome: contatos.emergencia_nome || dp.emergencia_nome || (raw.contato_emergencia?.nome) || '-',
+        emergencia_tel: contatos.emergencia_tel || dp.emergencia_tel || (raw.contato_emergencia?.telefone) || '-'
     };
 };
 
+// Busca os dados em pub._raw e melhora a formatação do endereço
 const getEndereco = (pub) => {
-    const dp = pub.dados_pessoais || {};
+    const raw = pub._raw || pub;
+    const dp = raw.dados_pessoais || raw.dadospessoais || {};
     const end = dp.endereco;
+
     if (end && typeof end === 'object') {
         const rua = end.logradouro || end.rua || '';
+        const numero = end.numero ? `, ${end.numero}` : '';
+        const bairro = end.bairro ? ` - ${end.bairro}` : '';
         const cidade = end.cidade || '';
         const uf = end.uf || '';
+
         if (!rua) return '-';
-        return `${rua} - ${cidade}/${uf}`;
+        // Formato: Rua, Numero - Bairro \n Cidade/UF
+        return `${rua}${numero}${bairro}\n${cidade}/${uf}`;
     }
     return end || '-';
+};
+
+// NOVO HELPER: Calcula a exibição exata da Situação
+const getSituacaoDisplay = (e) => {
+    const situacao = e.situacao || 'Ativo';
+    const regularidade = e.regularidade || 'Regular';
+
+    if (situacao === 'Ativo' && regularidade === 'Irregular') {
+        return 'Irregular';
+    }
+    return situacao;
 };
 
 // --- FUNÇÃO CORE (REUTILIZÁVEL) PARA DESENHAR O S-21 NO PDF ---
@@ -40,8 +61,8 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
     const drawCheckbox = (x, y, label, checked, color = [0, 0, 0]) => {
         doc.setDrawColor(0);
         doc.setFillColor(255, 255, 255);
-        doc.rect(x, y, 3.5, 3.5, 'FD'); 
-        
+        doc.rect(x, y, 3.5, 3.5, 'FD');
+
         if (checked) {
             doc.setFont("helvetica", "bold");
             doc.setFontSize(10);
@@ -49,7 +70,7 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
             doc.text("X", x + 0.5, y + 3);
             doc.setTextColor(0);
         }
-        
+
         doc.setFont("helvetica", "normal");
         doc.setFontSize(9);
         doc.setTextColor(color[0], color[1], color[2]);
@@ -66,14 +87,14 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
         doc.setFont("helvetica", "bold");
         doc.setFontSize(12);
         doc.text("REGISTRO DE PUBLICADOR DA CONGREGAÇÃO", 105, 12, { align: "center" });
-        
+
         doc.setFontSize(8);
         doc.setFont("helvetica", "normal");
         doc.text("S-21-T  11/23", 14, 18);
         doc.setFontSize(10);
         doc.setFont("helvetica", "bold");
         doc.text(`Ano de Serviço: ${anoServico}`, 195, 18, { align: "right" });
-        
+
         doc.setLineWidth(0.5);
         doc.line(14, 20, 196, 20);
 
@@ -116,7 +137,7 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
         y += 7;
         drawCheckbox(14, y - 3, "Pioneiro especial", tipoP === "Pioneiro Especial");
         drawCheckbox(55, y - 3, "Missionário em campo", tipoP === "Missionário");
-        
+
         if (privs.includes("Varão Habilitado")) {
             drawCheckbox(140, y - 3, "Varão Habilitado", true, [22, 163, 74]); // Verde
         }
@@ -124,7 +145,11 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
         y += 8;
         doc.setFontSize(8);
         doc.setTextColor(100);
-        doc.text(`Endereço: ${getEndereco(publicador)} | Tel: ${dp.contatos?.celular || '-'}`, 14, y);
+
+        // Pega o contato e endereço formatado da origem real
+        const contatosS21 = getContatos(publicador);
+        // O replace tira o \n que eu coloquei para quebrar linha na lista, deixando reto no cartão
+        doc.text(`Endereço: ${getEndereco(publicador).replace(/\n/g, ' - ')} | Tel: ${contatosS21.celular}`, 14, y);
         doc.setTextColor(0);
 
         // TABELA
@@ -144,7 +169,7 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
         const addMes = (mesNum, anoRef) => {
             const chave = `${anoRef}-${mesNum.toString().padStart(2, '0')}`;
             const r = relsDoAno[chave];
-            
+
             const date = new Date(anoRef, mesNum - 1);
             const nomeMes = date.toLocaleString('pt-BR', { month: 'long' });
             const labelMes = nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1);
@@ -155,17 +180,14 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
             let horas = "";
             let obs = "";
 
-            // Se o relatório existe (foi lançado)
             if (r && r.atividade) {
-                // CORREÇÃO AQUI: Lógica Sim/Não
                 if (r.atividade.participou) {
                     part = "Sim";
                     totMeses++;
                 } else {
-                    // Se o relatório existe, mas participou é false, escreve "Não"
                     part = "Não";
                 }
-                
+
                 if (r.atividade.estudos > 0) {
                     est = r.atividade.estudos.toString();
                     totEstudos += r.atividade.estudos;
@@ -183,7 +205,6 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
 
                 obs = r.atividade.observacoes || "";
             }
-            // Se 'r' não existe (não lançado), 'part' continua vazio ""
 
             linhas.push([labelMes, part, est, aux, horas, obs]);
         };
@@ -205,10 +226,10 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
             head: [colunas],
             body: linhas,
             theme: 'grid',
-            headStyles: { 
+            headStyles: {
                 fillColor: [255, 255, 255], textColor: 0, fontStyle: 'bold', lineWidth: 0.1, lineColor: 0, halign: 'center', valign: 'middle'
             },
-            styles: { 
+            styles: {
                 fontSize: 9, cellPadding: 3, lineColor: 0, lineWidth: 0.1, textColor: 0, halign: 'center'
             },
             columnStyles: {
@@ -242,7 +263,7 @@ export const gerarZipS21 = async (listaPublicadores, anosParaExibir, setProgress
     for (let i = 0; i < listaPublicadores.length; i++) {
         const item = listaPublicadores[i];
         const pub = item.publicador;
-        const rels = item.relatoriosPorAno || item.relatorios || {}; 
+        const rels = item.relatoriosPorAno || item.relatorios || {};
 
         const nomePub = pub.dados_pessoais.nome_completo || "Irmão";
         let prefixo = "grupo";
@@ -279,15 +300,44 @@ export const gerarPDFListaCompleta = (publicadores) => {
     doc.setFontSize(9);
     doc.text(`Total: ${publicadores.length} registros | Data: ${dataAtual}`, 14, 15);
 
-    const colunas = ["Nome / Grupo", "Privilégio/Tipo", "Contatos", "Endereço", "Emergência", "Datas Importantes"];
+    // Mudamos o nome da coluna para refletir que a Situação também está ali
+    const colunas = ["Nome / Grupo", "Situação / Tipo / Privilégio", "Contatos", "Endereço", "Emergência", "Datas Importantes"];
+
     const linhas = publicadores.map(pub => {
+        // Usa o objeto original para garantir que as datas batam mesmo se não estiverem no topo
+        const raw = pub._raw || pub;
+        const pRaw = raw.dados_pessoais || raw.dadospessoais || {};
+        const eRaw = raw.dados_eclesiasticos || raw.dadoseclesiasticos || {};
+
         const p = pub.dados_pessoais || {};
         const e = pub.dados_eclesiasticos || {};
+
         const c = getContatos(pub);
         const endereco = getEndereco(pub);
         const formatData = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('pt-BR') : '-';
-        const datas = [`Nasc: ${formatData(p.data_nascimento)}`, `Bat: ${formatData(e.data_batismo)}`, e.data_inicio ? `Chegada: ${formatData(e.data_inicio)}` : null].filter(Boolean).join('\n');
-        return [{ content: `${p.nome_completo || 'Sem Nome'}\n[${e.grupo_campo || 'Sem Grupo'}]`, styles: { fontStyle: 'bold' } }, e.pioneiro_tipo || e.privilegios?.join(', '), `${c.celular}\n${c.email}`, endereco, `${c.emergencia_nome}\n${c.emergencia_tel}`, datas];
+
+        const datas = [
+            `Nasc: ${formatData(p.data_nascimento || pRaw.data_nascimento)}`,
+            `Bat: ${formatData(e.data_batismo || eRaw.data_batismo)}`,
+            (e.data_inicio || eRaw.data_inicio) ? `Chegada: ${formatData(e.data_inicio || eRaw.data_inicio)}` : null
+        ].filter(Boolean).join('\n');
+
+        // AJUSTE: Combina a Situação, Tipo de Pioneiro e Privilégios.
+        const situacaoDisplay = getSituacaoDisplay(e);
+        let privilegiosText = e.pioneiro_tipo ? `${e.pioneiro_tipo}\n` : '';
+        if (e.privilegios && e.privilegios.length > 0) {
+            privilegiosText += e.privilegios.join(', ');
+        }
+        if (!privilegiosText) privilegiosText = 'Sem privilégio';
+
+        return [
+            { content: `${p.nome_completo || 'Sem Nome'}\n[${e.grupo_campo || 'Sem Grupo'}]`, styles: { fontStyle: 'bold' } },
+            `[${situacaoDisplay}]\n${privilegiosText}`,
+            `${c.celular}\n${c.email}`,
+            endereco,
+            `${c.emergencia_nome}\n${c.emergencia_tel}`,
+            datas
+        ];
     });
 
     autoTable(doc, {
@@ -297,7 +347,12 @@ export const gerarPDFListaCompleta = (publicadores) => {
         theme: 'grid',
         headStyles: { fillColor: [41, 128, 185], textColor: 255, fontStyle: 'bold', fontSize: 8, halign: 'center' },
         styles: { fontSize: 7, cellPadding: 2, valign: 'middle', overflow: 'linebreak' },
-        columnStyles: { 0: { cellWidth: 50 }, 3: { cellWidth: 55 } }
+        columnStyles: {
+            0: { cellWidth: 45 },
+            2: { cellWidth: 40 },
+            3: { cellWidth: 60 },
+            4: { cellWidth: 40 }
+        }
     });
 
     doc.save(`Lista_Publicadores_${dataAtual.replace(/\//g, '-')}.pdf`);
@@ -307,7 +362,7 @@ export const gerarPDFListaCompleta = (publicadores) => {
 export const gerarExcelListaCompleta = async (publicadores) => {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Publicadores');
-    
+
     worksheet.columns = [
         { header: 'Nome', key: 'nome', width: 30 }, { header: 'Grupo', key: 'grupo', width: 20 }, { header: 'Situação', key: 'situacao', width: 10 },
         { header: 'Privilégios', key: 'priv', width: 20 }, { header: 'Tipo Pioneiro', key: 'pioneiro', width: 15 },
@@ -320,17 +375,32 @@ export const gerarExcelListaCompleta = async (publicadores) => {
     worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2980B9' } };
 
     publicadores.forEach(pub => {
-        const p = pub.dados_pessoais || {}; const e = pub.dados_eclesiasticos || {}; const c = getContatos(pub);
+        const raw = pub._raw || pub;
+        const pRaw = raw.dados_pessoais || raw.dadospessoais || {};
+        const eRaw = raw.dados_eclesiasticos || raw.dadoseclesiasticos || {};
+
+        const p = pub.dados_pessoais || {};
+        const e = pub.dados_eclesiasticos || {};
+        const c = getContatos(pub);
         const d = (val) => val ? new Date(val + 'T12:00:00') : null;
+
         worksheet.addRow({
-            nome: p.nome_completo, grupo: e.grupo_campo, situacao: e.situacao,
-            priv: e.privilegios?.join(', '), pioneiro: e.pioneiro_tipo,
-            celular: c.celular, email: c.email, endereco: getEndereco(pub),
-            nasc: d(p.data_nascimento), batismo: d(e.data_batismo), chegada: d(e.data_inicio),
-            emerg_nome: c.emergencia_nome, emerg_tel: c.emergencia_tel
+            nome: p.nome_completo,
+            grupo: e.grupo_campo,
+            situacao: getSituacaoDisplay(e), // Usa o novo helper para colocar 'Irregular' se for o caso
+            priv: e.privilegios?.join(', '),
+            pioneiro: e.pioneiro_tipo,
+            celular: c.celular,
+            email: c.email,
+            endereco: getEndereco(pub).replace(/\n/g, ' - '), // Limpa a quebra de linha para o Excel
+            nasc: d(p.data_nascimento || pRaw.data_nascimento),
+            batismo: d(e.data_batismo || eRaw.data_batismo),
+            chegada: d(e.data_inicio || eRaw.data_inicio),
+            emerg_nome: c.emergencia_nome,
+            emerg_tel: c.emergencia_tel
         });
     });
-    
+
     const buffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     saveAs(blob, `Dados_Secretaria_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.xlsx`);

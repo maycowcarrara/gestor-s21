@@ -11,47 +11,79 @@ import { db } from '../config/firebase';
 
 /**
  * Sincronizador de Publicadores (Versão Final - Produção 🚀)
- * LÓGICA DE NEGÓCIO:
+ * LÓGICA DE NEGÓCIO (S-21):
  * 1. SITUAÇÃO (Vínculo - Janela de 6 meses):
- * - Ativo: Tem pelo menos 1 relatório VÁLIDO nos últimos 6 meses.
- * - Inativo: Não tem nenhum relatório válido na janela de 6 meses.
- * * 2. REGULARIDADE (Frequência - Mês Anterior):
- * - Regular: Relatou no mês de referência (mês passado).
- * - Irregular: Faltou com o relatório no mês de referência.
- * * 3. EXCEÇÕES (Status Intocáveis):
+ * - Ativo: Tem pelo menos 1 relatório VÁLIDO na janela dos últimos 6 meses exigidos.
+ * - Inativo: Não tem nenhum relatório válido na janela exigida.
+ * 2. REGULARIDADE (Frequência):
+ * - Regular: Relatou no mês exigido mais recente.
+ * - Irregular: Faltou com o relatório no mês exigido.
+ * 3. PRAZO DE ENTREGA (Carência até dia 20):
+ * - Antes do dia 20, a "cobrança" de regularidade é baseada no mês retrasado.
+ * 4. EXCEÇÕES (Status Intocáveis):
  * - 'Excluído', 'Removido', 'Mudou-se' não são alterados pelo script.
- * * 4. PROTEÇÃO (Imunidade para Novos):
+ * 5. PROTEÇÃO (Imunidade para Novos):
  * - Publicador com menos de 6 meses de congregação permanece Ativo e Regular.
  */
 export const sincronizarSituacaoPublicadoresClient = async () => {
     // Data Oficial de Hoje
     const hoje = new Date();
+    const diaAtual = hoje.getDate();
+
+    // Dia de corte para entrega dos relatórios S-21 na congregação
+    const DIA_CORTE = 20;
 
     console.log(`🚀 Iniciando Sincronização de Status e Regularidade...`);
+    console.log(`📅 Dia atual: ${diaAtual}. Limite de entrega: dia ${DIA_CORTE}.`);
 
     try {
-        // --- 1. DEFINIÇÃO DA JANELA DE 6 MESES ---
-        // A referência é sempre o Mês Passado em relação a hoje.
-        const dataReferencia = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+        // --- 1. DEFINIÇÃO DA JANELA E CARÊNCIA ---
+
+        // Mês Passado (Ex: Se hoje é 03/Mar, mesPassado = Fev)
+        const dataMesPassado = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+        const mesPassado = formatarMesISO(dataMesPassado);
+
+        // Mês Retrasado (Ex: Se hoje é 03/Mar, mesRetrasado = Jan)
+        const dataMesRetrasado = new Date(hoje.getFullYear(), hoje.getMonth() - 2, 1);
+        const mesRetrasado = formatarMesISO(dataMesRetrasado);
+
+        // 🎯 LÓGICA DO DIA 20:
+        // Se ainda não passou do dia 20, ele tem até o final do dia 20 para relatar o 'mesPassado'.
+        // Logo, ele é cobrado pelo 'mesRetrasado'. Porém, se já relatou o 'mesPassado', conta a favor.
+        const mesesParaRegularidade = diaAtual <= DIA_CORTE
+            ? [mesPassado, mesRetrasado] // Aceita o mês retrasado ou o passado adiantado
+            : [mesPassado];              // Passou do dia 20? Exige obrigatoriamente o mês passado
+
+        // A janela de inatividade baseia-se no prazo válido.
+        const dataBaseInatividade = diaAtual <= DIA_CORTE ? dataMesRetrasado : dataMesPassado;
 
         const mesesJanela = [];
-        // Gera a lista dos últimos 6 meses (Mês Ref até Ref-5)
+
+        // Sempre garantimos que o mês passado está na janela de leitura (caso ele tenha relatado cedo)
+        mesesJanela.push(mesPassado);
+
+        // Gera a lista dos últimos 6 meses exigidos
         for (let i = 0; i < 6; i++) {
-            const d = new Date(dataReferencia.getFullYear(), dataReferencia.getMonth() - i, 1);
-            mesesJanela.push(formatarMesISO(d));
+            const d = new Date(dataBaseInatividade.getFullYear(), dataBaseInatividade.getMonth() - i, 1);
+            const mesIso = formatarMesISO(d);
+            // Evita duplicação caso o mesPassado já esteja no array
+            if (!mesesJanela.includes(mesIso)) {
+                mesesJanela.push(mesIso);
+            }
         }
 
-        const mesAnterior = mesesJanela[0]; // O mês exato que define se é Regular ou Irregular
-        console.log(`📅 Janela de Análise (Mês Ref: ${mesAnterior}):`, mesesJanela);
+        // O array terá no máximo 7 itens. O Firestore 'in' aceita até 10, então estamos seguros e performáticos!
+        console.log(`🔍 Meses aceitos para Regularidade:`, mesesParaRegularidade);
+        console.log(`📅 Janela de Análise (Ativo/Inativo):`, mesesJanela);
 
         // --- 2. MAPEAR RELATÓRIOS COM PARTICIPAÇÃO REAL ---
-        // OTIMIZAÇÃO: Busca APENAS relatórios dos últimos 6 meses (Economiza milhares de leituras)
+        // OTIMIZAÇÃO: Busca APENAS relatórios dos meses na janela (Economiza milhares de leituras)
         const qHistorico = query(collection(db, 'relatorios'), where('mes_referencia', 'in', mesesJanela));
         const historicoSnap = await getDocs(qHistorico);
 
-        // Set contém apenas IDs que trabalharam de fato (Participou = true ou Horas > 0)
+        // Set contém apenas IDs que trabalharam de fato (Participou = true ou Horas > 0 ou Estudos > 0)
         const mapaParticipacao = new Set();
-        let contagemParticipouMesPassado = 0;
+        let contagemRelatoriosValidos = 0;
 
         historicoSnap.forEach(docSnap => {
             const dados = docSnap.data();
@@ -80,15 +112,14 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
             const horas = Number(dados.atividade?.horas || dados.horas || 0);
             const estudos = Number(dados.atividade?.estudos || dados.estudos || 0);
 
-            // Regra: Participou Flag TRUE **OU** Horas > 0 **OU** Estudos > 0
+            // Regra de Serviço: Participou Flag TRUE **OU** Horas > 0 **OU** Estudos > 0
             if (participouFlag || horas > 0 || estudos > 0) {
                 mapaParticipacao.add(`${pubId}|${dataRel}`);
-
-                if (dataRel === mesAnterior) contagemParticipouMesPassado++;
+                contagemRelatoriosValidos++;
             }
         });
 
-        console.log(`📊 Relatórios Válidos no mês de referência: ${contagemParticipouMesPassado}`);
+        console.log(`📊 Relatórios Válidos encontrados na janela: ${contagemRelatoriosValidos}`);
 
         // --- 3. ATUALIZAÇÃO DOS PUBLICADORES ---
         const qPubs = query(collection(db, 'publicadores'));
@@ -106,7 +137,7 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
             const situacaoAtual = pub.dados_eclesiasticos.situacao || 'Ativo';
             const regularidadeAtual = pub.dados_eclesiasticos.regularidade || 'Regular';
 
-            // 🛑 1. BLOQUEIO DE SEGURANÇA: EXCLUÍDOS E REMOVIDOS
+            // 🛑 1. BLOQUEIO DE SEGURANÇA: STATUS INTOCÁVEIS
             if (['Excluído', 'Removido', 'Mudou-se'].includes(situacaoAtual)) {
                 return;
             }
@@ -114,9 +145,12 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
             let novaSituacao = 'Inativo'; // Assume o pior caso
             let novaRegularidade = 'Irregular'; // Assume o pior caso
 
-            // 🔍 2. AVALIA A REGULARIDADE (Apenas o último mês)
-            if (mapaParticipacao.has(`${pid}|${mesAnterior}`)) {
-                novaRegularidade = 'Regular';
+            // 🔍 2. AVALIA A REGULARIDADE (De acordo com o prazo do dia 20)
+            for (const mesReq of mesesParaRegularidade) {
+                if (mapaParticipacao.has(`${pid}|${mesReq}`)) {
+                    novaRegularidade = 'Regular';
+                    break; // Achou relatório válido exigido, não precisa olhar mais
+                }
             }
 
             // 🔍 3. AVALIA A SITUAÇÃO (Janela de 6 meses)
@@ -132,29 +166,28 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
                 novaSituacao = 'Ativo';
             }
 
-            // 🛡️ 4. PROTEÇÃO INFALÍVEL PARA NOVATOS (< 6 Meses)
-            // Extraído do 'else' para garantir que ninguém escape dessa regra
+            // 🛡️ 4. PROTEÇÃO INFALÍVEL PARA NOVATOS (< 6 Meses de Batismo/Congregação)
             const dataInicioStr = pub.dados_eclesiasticos.data_inicio || pub.dados_eclesiasticos.data_inicio_congregacao;
 
             if (dataInicioStr) {
-                // Normaliza datas em "DD/MM/YYYY" ou "YYYY-MM-DD" para o JavaScript ler corretamente
+                // Normaliza datas em "DD/MM/YYYY" ou "YYYY-MM-DD"
                 const dataFormatada = dataInicioStr.includes('/')
                     ? dataInicioStr.split('/').reverse().join('-')
                     : dataInicioStr;
 
-                // Adiciona T12:00:00 para evitar bugs de fuso horário que jogam a data pro dia anterior
+                // T12:00:00 protege contra bugs bizarros de Timezone do JS
                 const dataInicio = new Date(`${dataFormatada}T12:00:00`);
 
-                // Calcula a diferença real em meses
                 const diffMeses = (hoje.getFullYear() - dataInicio.getFullYear()) * 12 + (hoje.getMonth() - dataInicio.getMonth());
 
-                // Regra de Ouro: Se tem menos de 6 meses, o sistema o PROÍBE de ser Inativo
+                // Regra de Ouro: Com menos de 6 meses, NÃO PODE ficar inativo pelo sistema
                 if (diffMeses <= 6) {
                     novaSituacao = 'Ativo';
+                    novaRegularidade = 'Regular';
                 }
             }
 
-            // 🚀 5. ATUALIZA APENAS SE HOUVE MUDANÇA
+            // 🚀 5. ADICIONA NO BATCH APENAS SE HOUVE MUDANÇA (Economia de gravação no DB)
             if (novaSituacao !== situacaoAtual || novaRegularidade !== regularidadeAtual) {
                 const pubRef = doc(db, 'publicadores', docPub.id);
                 batch.update(pubRef, {
@@ -164,7 +197,7 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
                 });
                 atualizacoesCount++;
             }
-        }); // <-- FECHAMENTO DO FOREACH QUE ESTAVA FALTANDO!
+        });
 
         // --- 6. SALVAMENTO EM LOTE (BATCH COMMIT) ---
         if (atualizacoesCount > 0) {
