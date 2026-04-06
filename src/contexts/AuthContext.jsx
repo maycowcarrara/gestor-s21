@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { auth, db, googleProvider } from '../config/firebase';
 import {
     signInWithPopup,
@@ -7,12 +7,7 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import toast from 'react-hot-toast';
-
-const AuthContext = createContext();
-
-export function useAuth() {
-    return useContext(AuthContext);
-}
+import { AuthContext } from './auth-context';
 
 export function AuthProvider({ children }) {
     const [user, setUser] = useState(null);
@@ -68,7 +63,7 @@ export function AuthProvider({ children }) {
                         // Opcional: Atualizar último acesso
                         try {
                             await setDoc(userRef, { ultimo_login: serverTimestamp() }, { merge: true });
-                        } catch (writeError) {
+                        } catch {
                             // Ignora erro de permissão na escrita do log, pois o login em si foi sucesso
                             console.warn("Não foi possível atualizar o último login (permissão de escrita restrita a admins).");
                         }

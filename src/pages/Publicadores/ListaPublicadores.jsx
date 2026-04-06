@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useDeferredValue, useEffect, useState, useCallback, startTransition } from 'react';
 import { db } from '../../config/firebase';
 import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import {
     Search, UserPlus, Users, ChevronRight, ChevronDown,
     Briefcase, Shield, X, Filter, Baby, Glasses, UserCheck,
@@ -9,16 +9,102 @@ import {
     Globe, Accessibility, EyeOff, User
 } from 'lucide-react';
 import { calcularFaixaEtaria } from '../../utils/helpers';
-import { gerarPDFListaCompleta, gerarExcelListaCompleta } from '../../utils/geradorPDF';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth } from '../../contexts/auth-context';
+import { isPublicadoresCacheFresh, readPublicadoresCache, writePublicadoresCache } from '../../utils/publicadoresCache';
+import { classificarSituacaoPublicador, normalizarPublicador, normalizarTextoBusca } from '../../utils/normalizadores';
+
+const adicionarTermoBusca = (termos, ...valores) => {
+    valores.forEach((valor) => {
+        const normalizado = normalizarTextoBusca(valor);
+        if (normalizado) termos.add(normalizado);
+    });
+};
+
+const montarTextoBuscaPublicador = (pub, faixaEtaria, situacaoClassificada) => {
+    const termos = new Set();
+    const nome = pub?.dados_pessoais?.nome_completo || '';
+    const genero = pub?.dados_pessoais?.genero || '';
+    const grupo = pub?.dados_eclesiasticos?.grupo_campo || 'Sem Grupo';
+    const tipo = pub?.dados_eclesiasticos?.pioneiro_tipo;
+    const batizado = !!pub?.dados_eclesiasticos?.batizado;
+    const privilegios = pub?.dados_eclesiasticos?.privilegios || [];
+    const situacao = pub?.dados_eclesiasticos?.situacao || 'Ativo';
+
+    adicionarTermoBusca(termos, nome, grupo, genero, situacao, situacaoClassificada);
+
+    if (genero === 'Masculino') {
+        adicionarTermoBusca(termos, 'homem', 'masculino');
+    }
+
+    if (genero === 'Feminino') {
+        adicionarTermoBusca(termos, 'mulher', 'feminino');
+    }
+
+    if (!tipo || tipo === 'Nenhum') {
+        adicionarTermoBusca(termos, 'publicador', 'publicadores');
+    } else {
+        adicionarTermoBusca(termos, tipo);
+
+        if (normalizarTextoBusca(tipo).includes('pioneiro')) {
+            adicionarTermoBusca(termos, 'pioneiro', 'pioneiros');
+        }
+    }
+
+    privilegios.forEach((privilegio) => {
+        adicionarTermoBusca(termos, privilegio);
+
+        if (privilegio === 'Ancião') {
+            adicionarTermoBusca(termos, 'anciao', 'anciaos');
+        }
+
+        if (privilegio === 'Servo Ministerial') {
+            adicionarTermoBusca(termos, 'servo', 'servos', 'servos ministeriais');
+        }
+
+        if (privilegio === 'Varão Habilitado') {
+            adicionarTermoBusca(termos, 'varao', 'varoes', 'varao habilitado', 'varoes habilitados');
+        }
+    });
+
+    if (faixaEtaria?.label) {
+        adicionarTermoBusca(termos, faixaEtaria.label);
+
+        if (faixaEtaria.label === 'Criança') adicionarTermoBusca(termos, 'crianca', 'criancas');
+        if (faixaEtaria.label === 'Jovem') adicionarTermoBusca(termos, 'jovens');
+        if (faixaEtaria.label === 'Adulto') adicionarTermoBusca(termos, 'adultos');
+        if (faixaEtaria.label === 'Idoso') adicionarTermoBusca(termos, 'idosos');
+    }
+
+    if (batizado) {
+        adicionarTermoBusca(termos, 'batizado', 'batizados');
+    } else {
+        adicionarTermoBusca(termos, 'nao batizado', 'nao batizados');
+    }
+
+    if (situacaoClassificada === 'Irregular') {
+        adicionarTermoBusca(termos, 'irregular', 'irregulares');
+    }
+
+    if (situacaoClassificada === 'Inativo') {
+        adicionarTermoBusca(termos, 'inativo', 'inativos');
+    }
+
+    if (situacaoClassificada === 'Removido') {
+        adicionarTermoBusca(termos, 'removido', 'removidos');
+    }
+
+    return Array.from(termos).join(' ');
+};
 
 export default function ListaPublicadores() {
     // --- SEGURANÇA ---
     const { isAdmin } = useAuth();
+    const location = useLocation();
 
     const [publicadores, setPublicadores] = useState([]);
     const [loading, setLoading] = useState(true);
     const [busca, setBusca] = useState("");
+    const buscaDiferida = useDeferredValue(busca);
     const [listaGrupos, setListaGrupos] = useState([]);
 
     // ALTERAÇÃO: Inicia fechado se for celular (largura < 768px), aberto se for desktop
@@ -49,89 +135,7 @@ export default function ListaPublicadores() {
     const [filtroGenero, setFiltroGenero] = useState("todos");
     const [filtroBatismo, setFiltroBatismo] = useState("todos");
 
-    // ------------------------- Helpers compatibilidade (schema novo + legado) -------------------------
-    const getNested = (obj, path) => {
-        try {
-            return path.split('.').reduce((acc, k) => (acc ? acc[k] : undefined), obj);
-        } catch {
-            return undefined;
-        }
-    };
-
-    const firstDefined = (obj, paths) => {
-        for (const p of paths) {
-            const v = p.includes('.') ? getNested(obj, p) : (obj ? obj[p] : undefined);
-            if (v !== undefined && v !== null && v !== '') return v;
-        }
-        return undefined;
-    };
-
-    const normalizarSituacao = (raw) => {
-        const s = String(raw ?? 'Ativo').trim().toLowerCase();
-        if (!s) return 'Ativo';
-
-        if (s === 'ativo') return 'Ativo';
-        if (s === 'irregular') return 'Irregular';
-        if (s === 'inativo') return 'Inativo';
-        if (s === 'removido') return 'Removido';
-
-        if (s === 'excludo' || s === 'excluido' || s === 'excluído') return 'Excluído';
-
-        return 'Ativo';
-    };
-
-    const normalizarPrivilegios = (raw) => {
-        if (Array.isArray(raw)) return raw.filter(Boolean).map(x => String(x).trim()).filter(Boolean);
-        if (typeof raw === 'string') {
-            const t = raw.trim();
-            return t ? [t] : [];
-        }
-        return [];
-    };
-
-    const normalizarPublicador = (raw, id) => {
-        const nome = firstDefined(raw, ['dados_pessoais.nome_completo', 'dadospessoais.nomecompleto']) || 'Sem nome';
-        const genero = firstDefined(raw, ['dados_pessoais.genero', 'dadospessoais.genero']) || 'Masculino';
-        const dataNascimento = firstDefined(raw, ['dados_pessoais.data_nascimento', 'dadospessoais.datanascimento']) || null;
-        const outraLingua = firstDefined(raw, ['dados_pessoais.outra_lingua', 'dadospessoais.outralingua']) || null;
-        const necessidadeEspecial = firstDefined(raw, ['dados_pessoais.necessidade_especial', 'dadospessoais.necessidadeespecial']) || null;
-        const situacaoRaw = firstDefined(raw, ['dados_eclesiasticos.situacao', 'dadoseclesiasticos.situacao']) || 'Ativo';
-
-        // 🚀 LENDO A REGULARIDADE
-        const regularidadeRaw = firstDefined(raw, ['dados_eclesiasticos.regularidade', 'dadoseclesiasticos.regularidade']) || 'Regular';
-
-        const grupoCampo = firstDefined(raw, ['dados_eclesiasticos.grupo_campo', 'dadoseclesiasticos.grupocampo']) || 'Sem Grupo';
-        const pioneiroTipo = firstDefined(raw, ['dados_eclesiasticos.pioneiro_tipo', 'dadoseclesiasticos.pioneirotipo']) || null;
-        const batizado = firstDefined(raw, ['dados_eclesiasticos.batizado', 'dadoseclesiasticos.batizado']);
-        const privRaw = firstDefined(raw, ['dados_eclesiasticos.privilegios', 'dadoseclesiasticos.privilegios']);
-
-        return {
-            id,
-            _raw: raw,
-            dados_pessoais: {
-                nome_completo: String(nome),
-                genero: genero ?? null,
-                data_nascimento: dataNascimento ?? null,
-                outra_lingua: outraLingua ?? null,
-                necessidade_especial: necessidadeEspecial ?? null
-            },
-            dados_eclesiasticos: {
-                situacao: normalizarSituacao(situacaoRaw),
-                regularidade: String(regularidadeRaw), // <- Salvando na normalização
-                grupo_campo: String(grupoCampo || 'Sem Grupo'),
-                pioneiro_tipo: pioneiroTipo ?? null,
-                batizado: !!batizado,
-                privilegios: normalizarPrivilegios(privRaw)
-            }
-        };
-    };
-
-    useEffect(() => {
-        carregarPublicadores();
-        carregarConfigGrupos();
-    }, []);
-
-    const carregarConfigGrupos = async () => {
+    const carregarConfigGrupos = useCallback(async () => {
         try {
             const docRef = doc(db, "config", "geral");
             const docSnap = await getDoc(docRef);
@@ -141,13 +145,16 @@ export default function ListaPublicadores() {
         } catch (error) {
             console.error("Erro ao carregar grupos:", error);
         }
-    };
+    }, []);
 
-    const carregarPublicadores = async () => {
+    const carregarPublicadores = useCallback(async () => {
         setLoading(true);
         try {
             const snap = await getDocs(collection(db, "publicadores"));
-            const lista = snap.docs.map(d => normalizarPublicador(d.data(), d.id));
+            const listaRaw = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            writePublicadoresCache(listaRaw);
+
+            const lista = listaRaw.map(d => normalizarPublicador(d, d.id));
             lista.sort((a, b) =>
                 (a.dados_pessoais.nome_completo || '').localeCompare(
                     (b.dados_pessoais.nome_completo || ''),
@@ -161,7 +168,36 @@ export default function ListaPublicadores() {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        const cache = readPublicadoresCache();
+        if (cache?.value?.length) {
+            const lista = cache.value.map(d => normalizarPublicador(d, d.id));
+            lista.sort((a, b) =>
+                (a.dados_pessoais.nome_completo || '').localeCompare(
+                    (b.dados_pessoais.nome_completo || ''),
+                    'pt-BR'
+                )
+            );
+            startTransition(() => setPublicadores(lista));
+            setLoading(false);
+
+            if (!isPublicadoresCacheFresh(cache)) {
+                carregarPublicadores();
+            }
+        } else {
+            carregarPublicadores();
+        }
+
+        carregarConfigGrupos();
+    }, [carregarConfigGrupos, carregarPublicadores]);
+
+    useEffect(() => {
+        if (location.pathname === '/publicadores') {
+            setFiltroSituacao('Geral');
+        }
+    }, [location.pathname]);
 
     const toggleGrupo = (nomeGrupo) => {
         setGruposExpandidos(prev => ({
@@ -173,24 +209,25 @@ export default function ListaPublicadores() {
     // --- LÓGICA DE FILTRAGEM ---
     const publicadoresFiltrados = publicadores.filter(pub => {
         const situacao = pub?.dados_eclesiasticos?.situacao || "Ativo";
-        const regularidade = pub?.dados_eclesiasticos?.regularidade || "Regular";
+        const situacaoClassificada = classificarSituacaoPublicador(pub);
+        const faixaEtaria = calcularFaixaEtaria(pub?.dados_pessoais?.data_nascimento);
 
         // 🚀 FILTRO ATUALIZADO PARA CONSIDERAR IRREGULARES
         if (filtroSituacao === 'Geral') {
             if (situacao === 'Excluído') return false;
         } else if (filtroSituacao === 'Irregular') {
-            // 🚀 CORREÇÃO: Filtra apenas quem é 'Ativo' na congregação e está 'Irregular'
-            // Impede que os 'Inativos' apareçam aqui, pois eles já têm o próprio filtro.
-            if (situacao !== 'Ativo' || regularidade !== 'Irregular') return false;
+            if (situacaoClassificada !== 'Irregular') return false;
         } else if (filtroSituacao === 'Ativo') {
-            // Se escolheu 'Ativo', mostra os ativos, mas esconde os que estão Irregulares 
-            if (situacao !== 'Ativo' || regularidade === 'Irregular') return false;
+            if (situacaoClassificada !== 'Ativo') return false;
         } else {
-            if (situacao !== filtroSituacao) return false;
+            if (situacaoClassificada !== filtroSituacao && situacao !== filtroSituacao) return false;
         }
 
-        const nome = (pub?.dados_pessoais?.nome_completo || '').toLowerCase();
-        if (busca && !nome.includes(busca.toLowerCase())) return false;
+        const termosBusca = normalizarTextoBusca(buscaDiferida).split(' ').filter(Boolean);
+        if (termosBusca.length > 0) {
+            const textoBuscaPublicador = montarTextoBuscaPublicador(pub, faixaEtaria, situacaoClassificada);
+            if (!termosBusca.every((termo) => textoBuscaPublicador.includes(termo))) return false;
+        }
 
         if (filtroGenero !== 'todos' && pub?.dados_pessoais?.genero !== filtroGenero) return false;
 
@@ -212,10 +249,9 @@ export default function ListaPublicadores() {
         }
 
         if (filtroFaixa !== 'todos') {
-            const faixa = calcularFaixaEtaria(pub?.dados_pessoais?.data_nascimento);
-            if (!faixa) return false;
+            if (!faixaEtaria) return false;
 
-            const labelLower = faixa.label.toLowerCase();
+            const labelLower = faixaEtaria.label.toLowerCase();
             if (filtroFaixa === 'crianca' && !labelLower.includes('criança') && !labelLower.includes('crianca')) return false;
             if (filtroFaixa === 'jovem' && !labelLower.includes('jovem')) return false;
             if (filtroFaixa === 'adulto' && !labelLower.includes('adulto')) return false;
@@ -447,14 +483,20 @@ export default function ListaPublicadores() {
 
                     <div className="flex gap-2 mr-0 md:mr-2 border-r border-gray-200 pr-0 md:pr-4">
                         <button
-                            onClick={() => gerarPDFListaCompleta(publicadoresFiltrados)}
+                            onClick={async () => {
+                                const { gerarPDFListaCompleta } = await import('../../utils/s21Pdf');
+                                gerarPDFListaCompleta(publicadoresFiltrados);
+                            }}
                             className="bg-white border border-gray-300 w-10 h-10 rounded-lg text-gray-700 flex items-center justify-center hover:bg-gray-50 transition shadow-sm"
                             title="Imprimir PDF"
                         >
                             <Printer size={18} className="text-red-600" />
                         </button>
                         <button
-                            onClick={() => gerarExcelListaCompleta(publicadoresFiltrados)}
+                            onClick={async () => {
+                                const { gerarExcelListaCompleta } = await import('../../utils/geradorExcel');
+                                await gerarExcelListaCompleta(publicadoresFiltrados);
+                            }}
                             className="bg-white border border-gray-300 w-10 h-10 rounded-lg text-gray-700 flex items-center justify-center hover:bg-gray-50 transition shadow-sm"
                             title="Baixar Excel"
                         >
@@ -493,8 +535,24 @@ export default function ListaPublicadores() {
                             placeholder="Buscar nome..."
                             value={busca}
                             onChange={(e) => setBusca(e.target.value)}
-                            className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-200 outline-none text-sm"
+                            onKeyDown={(e) => {
+                                if (e.key === 'Escape') {
+                                    setBusca('');
+                                }
+                            }}
+                            className="w-full pl-10 pr-10 py-2.5 bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-200 outline-none text-sm"
                         />
+                        {busca && (
+                            <button
+                                type="button"
+                                onClick={() => setBusca('')}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition"
+                                title="Limpar busca"
+                                aria-label="Limpar busca"
+                            >
+                                <X size={16} />
+                            </button>
+                        )}
                     </div>
 
                     <div className="bg-white p-1 rounded-lg border border-gray-200 flex shrink-0 overflow-x-auto items-center">

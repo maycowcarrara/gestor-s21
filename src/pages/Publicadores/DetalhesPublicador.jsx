@@ -10,8 +10,7 @@ import {
 import toast from 'react-hot-toast';
 import ModalLancamento from '../../components/Relatorios/ModalLancamento';
 import { calcularFaixaEtaria } from '../../utils/helpers';
-import { gerarPDFIndividual } from '../../utils/geradorPDF';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth } from '../../contexts/auth-context';
 
 // utils (conforme combinado)
 import { normalizarSituacao } from '../../utils/normalizadores';
@@ -248,9 +247,10 @@ export default function DetalhesPublicador() {
         }
     };
 
-    const handleImprimirIndividual = () => {
+    const handleImprimirIndividual = async () => {
         setImprimindo(true);
         try {
+            const { gerarPDFIndividual } = await import('../../utils/s21Pdf');
             gerarPDFIndividual(publicador, relatoriosPorAno, anosParaExibir);
             toast.success('PDF baixado com sucesso!');
         } catch (error) {

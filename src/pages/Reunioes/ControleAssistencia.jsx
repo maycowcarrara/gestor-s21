@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { db } from '../../config/firebase';
 import { doc, getDoc, setDoc, collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
-import { Users, ChevronLeft, ChevronRight, CheckCircle, Calendar, Save, Info, Printer } from 'lucide-react';
+import { Users, ChevronLeft, ChevronRight, CheckCircle, Calendar, Save, Info, Printer, Clock3 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { gerarGradeSemanal } from '../../utils/assistenciaUtils';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { gerarPDF_S88 } from '../../utils/geradorS88';
 import { atualizarEstatisticasAssistenciaClient } from '../../utils/assistenciaAggregator';
+
+const AssistenciaTrendChart = lazy(() => import('../../components/reunioes/AssistenciaTrendChart'));
 
 export default function ControleAssistencia() {
     const [dataReferencia, setDataReferencia] = useState(new Date());
@@ -16,8 +16,10 @@ export default function ControleAssistencia() {
 
     const [semanas, setSemanas] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [salvandoId, setSalvandoId] = useState(null);
+    const [salvandoIds, setSalvandoIds] = useState({});
     const [isMounted, setIsMounted] = useState(false);
+    const saveTimersRef = useRef({});
+    const semanasRef = useRef([]);
 
     // --- LÓGICA DO ANO DE SERVIÇO (S-88) ---MCMC
     const getAnoServicoAtual = () => {
@@ -58,13 +60,12 @@ export default function ControleAssistencia() {
         setIsMounted(true);
     }, []);
 
-    // 2. Carregar Grade e Dados
     useEffect(() => {
-        if (!configGeral) return;
-        carregarGradeMensal();
-    }, [dataReferencia, configGeral]);
+        semanasRef.current = semanas;
+    }, [semanas]);
 
-    const carregarGradeMensal = async () => {
+    // 2. Carregar Grade e Dados
+    const carregarGradeMensal = useCallback(async () => {
         setLoading(true);
         try {
             const ano = dataReferencia.getFullYear();
@@ -92,11 +93,23 @@ export default function ControleAssistencia() {
                 const novaSemana = { ...semana };
                 if (novaSemana.meio) {
                     const salvo = dadosExistentes[novaSemana.meio.id];
-                    novaSemana.meio = { ...novaSemana.meio, presentes: salvo ? salvo.presentes : '', salvoNoBanco: !!salvo };
+                    const valorSalvo = salvo ? String(salvo.presentes ?? '') : '';
+                    novaSemana.meio = {
+                        ...novaSemana.meio,
+                        presentes: valorSalvo,
+                        valorSalvo,
+                        salvoNoBanco: !!salvo
+                    };
                 }
                 if (novaSemana.fim) {
                     const salvo = dadosExistentes[novaSemana.fim.id];
-                    novaSemana.fim = { ...novaSemana.fim, presentes: salvo ? salvo.presentes : '', salvoNoBanco: !!salvo };
+                    const valorSalvo = salvo ? String(salvo.presentes ?? '') : '';
+                    novaSemana.fim = {
+                        ...novaSemana.fim,
+                        presentes: valorSalvo,
+                        valorSalvo,
+                        salvoNoBanco: !!salvo
+                    };
                 }
                 return novaSemana;
             });
@@ -108,16 +121,74 @@ export default function ControleAssistencia() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [configGeral, dataReferencia]);
 
-    const handleSalvar = async (reuniaoObj, novoValor, semanaIndex, tipoCampo) => {
+    useEffect(() => {
+        if (!configGeral) return;
+        carregarGradeMensal();
+    }, [carregarGradeMensal, configGeral]);
+
+    const atualizarReuniaoLocal = useCallback((reuniaoId, novoValor) => {
+        setSemanas(prev => prev.map((semana) => {
+            const meioEhAlvo = semana.meio?.id === reuniaoId;
+            const fimEhAlvo = semana.fim?.id === reuniaoId;
+
+            if (!meioEhAlvo && !fimEhAlvo) return semana;
+
+            return {
+                ...semana,
+                ...(meioEhAlvo ? {
+                    meio: {
+                        ...semana.meio,
+                        presentes: novoValor,
+                        salvoNoBanco: String(semana.meio?.valorSalvo ?? '') === String(novoValor)
+                    }
+                } : {}),
+                ...(fimEhAlvo ? {
+                    fim: {
+                        ...semana.fim,
+                        presentes: novoValor,
+                        salvoNoBanco: String(semana.fim?.valorSalvo ?? '') === String(novoValor)
+                    }
+                } : {})
+            };
+        }));
+    }, []);
+
+    const obterReuniaoAtual = useCallback((reuniaoId) => {
+        for (let index = 0; index < semanasRef.current.length; index += 1) {
+            const semana = semanasRef.current[index];
+            if (semana.meio?.id === reuniaoId) {
+                return { reuniaoObj: semana.meio, semanaIndex: index, tipoCampo: 'meio' };
+            }
+            if (semana.fim?.id === reuniaoId) {
+                return { reuniaoObj: semana.fim, semanaIndex: index, tipoCampo: 'fim' };
+            }
+        }
+        return null;
+    }, []);
+
+    const setSalvando = useCallback((reuniaoId, ativo) => {
+        setSalvandoIds(prev => {
+            const next = { ...prev };
+            if (ativo) next[reuniaoId] = true;
+            else delete next[reuniaoId];
+            return next;
+        });
+    }, []);
+
+    const handleSalvar = useCallback(async (reuniaoId) => {
+        const registroAtual = obterReuniaoAtual(reuniaoId);
+        const reuniaoObj = registroAtual?.reuniaoObj;
         if (!reuniaoObj) return;
-        if (String(reuniaoObj.presentes) === String(novoValor)) return;
 
-        const valorNumerico = parseInt(novoValor);
-        if (novoValor !== "" && (isNaN(valorNumerico) || valorNumerico < 0)) return;
+        const novoValor = String(reuniaoObj.presentes ?? '');
+        if (String(reuniaoObj.valorSalvo ?? '') === novoValor) return;
 
-        setSalvandoId(reuniaoObj.id);
+        const valorNumerico = parseInt(novoValor, 10);
+        if (novoValor !== "" && (Number.isNaN(valorNumerico) || valorNumerico < 0)) return;
+
+        setSalvando(reuniaoId, true);
         try {
             const docRef = doc(db, "assistencia", reuniaoObj.id);
             const dadosParaSalvar = {
@@ -134,62 +205,122 @@ export default function ControleAssistencia() {
             // Isso garante que a média mensal seja recalculada imediatamente no navegador
             await atualizarEstatisticasAssistenciaClient(reuniaoObj.data);
 
-            setSemanas(prev => {
-                const novas = [...prev];
-                const semanaAlvo = { ...novas[semanaIndex] };
-                semanaAlvo[tipoCampo] = { ...semanaAlvo[tipoCampo], presentes: novoValor, salvoNoBanco: true };
-                novas[semanaIndex] = semanaAlvo;
-                return novas;
-            });
+            setSemanas(prev => prev.map((semana) => {
+                const meioEhAlvo = semana.meio?.id === reuniaoObj.id;
+                const fimEhAlvo = semana.fim?.id === reuniaoObj.id;
+
+                if (!meioEhAlvo && !fimEhAlvo) return semana;
+
+                return {
+                    ...semana,
+                    ...(meioEhAlvo ? {
+                        meio: { ...semana.meio, presentes: novoValor, valorSalvo: novoValor, salvoNoBanco: true }
+                    } : {}),
+                    ...(fimEhAlvo ? {
+                        fim: { ...semana.fim, presentes: novoValor, valorSalvo: novoValor, salvoNoBanco: true }
+                    } : {})
+                };
+            }));
         } catch (error) {
             console.error(error);
             toast.error("Erro ao salvar.");
         } finally {
-            setSalvandoId(null);
+            setSalvando(reuniaoId, false);
         }
-    };
+    }, [obterReuniaoAtual, setSalvando]);
 
-    const mudarMes = (delta) => {
+    const agendarSalvar = useCallback((reuniaoId, novoValor) => {
+        atualizarReuniaoLocal(reuniaoId, novoValor);
+        if (saveTimersRef.current[reuniaoId]) clearTimeout(saveTimersRef.current[reuniaoId]);
+        saveTimersRef.current[reuniaoId] = setTimeout(() => {
+            delete saveTimersRef.current[reuniaoId];
+            handleSalvar(reuniaoId);
+        }, 700);
+    }, [atualizarReuniaoLocal, handleSalvar]);
+
+    const flushSalvar = useCallback(async (reuniaoId) => {
+        if (saveTimersRef.current[reuniaoId]) {
+            clearTimeout(saveTimersRef.current[reuniaoId]);
+            delete saveTimersRef.current[reuniaoId];
+        }
+        await handleSalvar(reuniaoId);
+    }, [handleSalvar]);
+
+    const flushTodosPendentes = useCallback(async () => {
+        const pendentes = Object.keys(saveTimersRef.current);
+        await Promise.all(pendentes.map((reuniaoId) => flushSalvar(reuniaoId)));
+    }, [flushSalvar]);
+
+    useEffect(() => () => {
+        const pendentes = Object.keys(saveTimersRef.current);
+        pendentes.forEach((reuniaoId) => {
+            clearTimeout(saveTimersRef.current[reuniaoId]);
+            delete saveTimersRef.current[reuniaoId];
+            handleSalvar(reuniaoId);
+        });
+    }, [handleSalvar]);
+
+    const mudarMes = async (delta) => {
+        await flushTodosPendentes();
         const novaData = new Date(dataReferencia);
         novaData.setMonth(novaData.getMonth() + delta);
         setDataReferencia(novaData);
     };
 
-    const renderInputCell = (reuniaoObj, semanaIndex, tipoCampo) => {
+    const renderInputCell = (reuniaoObj) => {
         if (!reuniaoObj) return <div className="bg-gray-50 h-14 rounded-lg border border-dashed border-gray-200 flex items-center justify-center text-gray-300 text-xs select-none">Sem Reunião</div>;
-        const isSaving = salvandoId === reuniaoObj.id;
-        const isSaved = reuniaoObj.salvoNoBanco && !isSaving;
+        const isSaving = !!salvandoIds[reuniaoObj.id];
+        const isDirty = String(reuniaoObj.presentes ?? '') !== String(reuniaoObj.valorSalvo ?? '');
+        const isSaved = !isSaving && !isDirty && reuniaoObj.salvoNoBanco;
 
         return (
             <div className="relative group">
                 <div className="absolute -top-2 left-3 bg-white px-1 text-[10px] font-bold text-gray-400">Dia {reuniaoObj.diaStr}</div>
                 <input
                     type="number"
-                    defaultValue={reuniaoObj.presentes}
-                    onBlur={(e) => handleSalvar(reuniaoObj, e.target.value, semanaIndex, tipoCampo)}
-                    className={`w-full text-center text-xl font-bold border-2 rounded-lg py-3 outline-none transition ${isSaved ? 'border-green-200 bg-green-50/30 text-gray-800' : 'border-gray-200 focus:border-teocratico-blue focus:bg-white'}`}
+                    value={reuniaoObj.presentes ?? ''}
+                    onChange={(e) => {
+                        if (e.target.value !== '' && Number(e.target.value) < 0) return;
+                        agendarSalvar(reuniaoObj.id, e.target.value);
+                    }}
+                    onBlur={() => flushSalvar(reuniaoObj.id)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                            e.currentTarget.blur();
+                        }
+                    }}
+                    className={`w-full text-center text-xl font-bold border-2 rounded-lg py-3 pr-10 outline-none transition ${
+                        isSaving
+                            ? 'border-blue-200 bg-blue-50/40 text-gray-800'
+                            : isSaved
+                                ? 'border-green-200 bg-green-50/30 text-gray-800'
+                                : isDirty
+                                    ? 'border-amber-200 bg-amber-50/40 text-gray-800'
+                                    : 'border-gray-200 focus:border-teocratico-blue focus:bg-white'
+                    }`}
                     placeholder="-"
                 />
                 {isSaved && <div className="absolute top-1/2 -translate-y-1/2 right-3 text-green-500"><CheckCircle size={16} /></div>}
                 {isSaving && <div className="absolute top-1/2 -translate-y-1/2 right-3 text-blue-500 animate-spin"><Save size={16} /></div>}
+                {!isSaving && isDirty && <div className="absolute top-1/2 -translate-y-1/2 right-3 text-amber-500"><Clock3 size={16} /></div>}
             </div>
         );
     };
 
-    const medias = (() => {
+    const medias = useMemo(() => {
         let sM = 0, cM = 0, sF = 0, cF = 0;
         semanas.forEach(s => {
-            if (s.meio?.presentes > 0) { sM += Number(s.meio.presentes); cM++; }
-            if (s.fim?.presentes > 0) { sF += Number(s.fim.presentes); cF++; }
+            if (Number(s.meio?.presentes) > 0) { sM += Number(s.meio.presentes); cM++; }
+            if (Number(s.fim?.presentes) > 0) { sF += Number(s.fim.presentes); cF++; }
         });
         return { mediaMeio: cM ? Math.round(sM / cM) : 0, mediaFim: cF ? Math.round(sF / cF) : 0 };
-    })();
+    }, [semanas]);
 
-    const dadosGrafico = semanas.map((s, i) => ({
+    const dadosGrafico = useMemo(() => semanas.map((s, i) => ({
         name: `Sem ${i + 1}`,
-        meio: s.meio?.presentes ? Number(s.meio.presentes) : 0,
-        fim: s.fim?.presentes ? Number(s.fim.presentes) : 0,
-    }));
+        meio: Number(s.meio?.presentes || 0),
+        fim: Number(s.fim?.presentes || 0),
+    })), [semanas]);
 
     return (
         <div className="p-4 md:p-6 max-w-5xl mx-auto pb-20">
@@ -214,7 +345,10 @@ export default function ControleAssistencia() {
                             ))}
                         </select>
                         <button
-                            onClick={() => gerarPDF_S88(anoServicoPDF, configGeral?.nomeCongregacao || "Congregação Local")}
+                            onClick={async () => {
+                                const { gerarPDF_S88 } = await import('../../utils/geradorS88');
+                                gerarPDF_S88(anoServicoPDF, configGeral?.nomeCongregacao || "Congregação Local");
+                            }}
                             className="flex items-center gap-2 bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-black transition text-xs font-bold shadow-sm uppercase tracking-wide"
                         >
                             <Printer size={16} /> Gerar PDF
@@ -257,17 +391,9 @@ export default function ControleAssistencia() {
                     <h3 className="text-sm font-bold text-gray-700 mb-4 flex items-center gap-2">Tendência Mensal</h3>
                     <div className="w-full h-[250px]">
                         {isMounted && (
-                            <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={dadosGrafico}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#9CA3AF' }} />
-                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#9CA3AF' }} allowDecimals={false} />
-                                    <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }} />
-                                    <Legend verticalAlign="top" height={36} iconType="circle" />
-                                    <Line type="monotone" dataKey="meio" name="Meio de Semana" stroke="#f97316" strokeWidth={4} dot={{ r: 6, fill: '#fff' }} />
-                                    <Line type="monotone" dataKey="fim" name="Fim de Semana" stroke="#2563eb" strokeWidth={4} dot={{ r: 6, fill: '#fff' }} />
-                                </LineChart>
-                            </ResponsiveContainer>
+                            <Suspense fallback={<div className="h-full w-full rounded-xl bg-gray-50 animate-pulse" />}>
+                                <AssistenciaTrendChart dadosGrafico={dadosGrafico} />
+                            </Suspense>
                         )}
                     </div>
                 </div>
@@ -292,13 +418,13 @@ export default function ControleAssistencia() {
                         </div>
                     ) : (
                         semanas.map((semana, index) => (
-                            <div key={index} className="grid grid-cols-12 py-4 hover:bg-gray-50/50 transition items-center">
+                            <div key={`${semana.meio?.id || 'sem-meio'}_${semana.fim?.id || 'sem-fim'}`} className="grid grid-cols-12 py-4 hover:bg-gray-50/50 transition items-center">
                                 <div className="col-span-1 flex justify-center">
                                     <span className="bg-gray-100 text-gray-500 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold">{index + 1}</span>
                                 </div>
                                 <div className="col-span-11 grid grid-cols-2 gap-8 px-6">
-                                    <div>{renderInputCell(semana.meio, index, 'meio')}</div>
-                                    <div>{renderInputCell(semana.fim, index, 'fim')}</div>
+                                    <div>{renderInputCell(semana.meio)}</div>
+                                    <div>{renderInputCell(semana.fim)}</div>
                                 </div>
                             </div>
                         ))
@@ -308,7 +434,7 @@ export default function ControleAssistencia() {
 
             <div className="mt-4 flex items-start gap-2 text-xs text-gray-400 px-4">
                 <Info size={14} className="mt-0.5 shrink-0" />
-                <p>Os dados são salvos automaticamente ao sair do campo. O gráfico reflete as alterações em tempo real.</p>
+                <p>Os dados são salvos automaticamente enquanto você digita. O ícone amarelo indica alteração pendente, azul mostra salvamento em andamento e verde confirma que ficou salvo no banco.</p>
             </div>
         </div>
     );

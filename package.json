@@ -1,20 +1,25 @@
 {
   "name": "gestor-s21",
   "private": true,
-  "version": "1.8.63",
+  "version": "2.0.63",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "deploy": "node scripts/deploy.js"
+    "deploy": "node scripts/deploy.js",
+    "admin:check": "node scripts/firestore-admin-check.js",
+    "admin:audit": "node scripts/firestore-audit.js",
+    "admin:consistency": "node scripts/firestore-consistency-audit.js",
+    "admin:repair": "node scripts/firestore-repair-derived-data.js"
   },
   "dependencies": {
     "date-fns": "^4.1.0",
     "exceljs": "^4.4.0",
     "file-saver": "^2.0.5",
     "firebase": "^12.9.0",
+    "firebase-admin": "^13.7.0",
     "jspdf": "^4.1.0",
     "jspdf-autotable": "^5.0.7",
     "jszip": "^3.10.1",

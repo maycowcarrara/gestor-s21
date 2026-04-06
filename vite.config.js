@@ -88,14 +88,62 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          const isNodeModule = (name) =>
+            id.includes(`/node_modules/${name}/`) ||
+            id.includes(`\\node_modules\\${name}\\`);
+
           if (id.includes('node_modules')) {
-            if (id.includes('jspdf') || id.includes('html2canvas') || id.includes('exceljs') || id.includes('jszip')) {
-              return 'heavy-libs';
-            }
-            if (id.includes('firebase')) {
+            if (isNodeModule('firebase') || id.includes('@firebase')) {
               return 'firebase-core';
             }
-            return 'vendor';
+            if (isNodeModule('react') || isNodeModule('react-dom') || isNodeModule('scheduler')) {
+              return 'react-core';
+            }
+            if (isNodeModule('react-router') || isNodeModule('react-router-dom') || isNodeModule('@remix-run/router')) {
+              return 'router';
+            }
+            if (isNodeModule('lucide-react')) {
+              return 'ui-icons';
+            }
+            if (isNodeModule('react-hot-toast')) {
+              return 'feedback';
+            }
+            if (isNodeModule('react-hook-form')) {
+              return 'form-libs';
+            }
+            if (
+              isNodeModule('recharts') ||
+              isNodeModule('victory-vendor') ||
+              isNodeModule('react-redux') ||
+              isNodeModule('@reduxjs/toolkit') ||
+              isNodeModule('reselect') ||
+              isNodeModule('immer') ||
+              isNodeModule('use-sync-external-store') ||
+              isNodeModule('es-toolkit') ||
+              isNodeModule('eventemitter3') ||
+              isNodeModule('decimal.js-light') ||
+              isNodeModule('tiny-invariant') ||
+              id.includes(`${'/node_modules/d3-'}`) ||
+              id.includes(`${'\\node_modules\\d3-'}`)
+            ) {
+              return 'charts';
+            }
+            if (isNodeModule('jspdf') || isNodeModule('html2canvas') || isNodeModule('jspdf-autotable')) {
+              return 'pdf-libs';
+            }
+            if (isNodeModule('exceljs')) {
+              return 'excel-libs';
+            }
+            if (isNodeModule('jszip')) {
+              return 'zip-libs';
+            }
+            if (isNodeModule('file-saver')) {
+              return 'file-save';
+            }
+            if (isNodeModule('date-fns') || isNodeModule('papaparse')) {
+              return 'data-utils';
+            }
+            return 'vendor-misc';
           }
         }
       }

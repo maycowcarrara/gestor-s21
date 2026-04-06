@@ -3,6 +3,12 @@ import React, { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Filter, XCircle, CheckCircle, Activity, Minus, ArrowUpDown, User, Award, Star } from 'lucide-react';
 
+const SortIcon = ({ campo, ordenacao }) => (
+    ordenacao.campo !== campo
+        ? <ArrowUpDown size={14} className="text-gray-300 ml-1" />
+        : <ArrowUpDown size={14} className={`ml-1 ${ordenacao.direcao === 'asc' ? 'text-blue-600' : 'text-blue-600 transform rotate-180'}`} />
+);
+
 export default function AbaControleMensal({ dados }) {
     const [filtroStatus, setFiltroStatus] = useState('todos');
     const [filtroTipo, setFiltroTipo] = useState('todos');
@@ -75,7 +81,6 @@ export default function AbaControleMensal({ dados }) {
     }, [dados, filtroStatus, filtroTipo, filtroGrupo, ordenacao]);
 
     const manipularOrdenacao = (campo) => setOrdenacao(prev => ({ campo, direcao: prev.campo === campo && prev.direcao === 'asc' ? 'desc' : 'asc' }));
-    const SortIcon = ({ campo }) => ordenacao.campo !== campo ? <ArrowUpDown size={14} className="text-gray-300 ml-1" /> : <ArrowUpDown size={14} className={`ml-1 ${ordenacao.direcao === 'asc' ? 'text-blue-600' : 'text-blue-600 transform rotate-180'}`} />;
 
     return (
         <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -108,11 +113,11 @@ export default function AbaControleMensal({ dados }) {
                     <table className="w-full text-sm text-left">
                         <thead className="bg-gray-50 text-gray-600 font-medium border-b">
                             <tr>
-                                <th onClick={() => manipularOrdenacao('nome')} className="px-6 py-3 cursor-pointer hover:bg-gray-100 select-none"><div className="flex items-center">Publicador <SortIcon campo="nome" /></div></th>
+                                <th onClick={() => manipularOrdenacao('nome')} className="px-6 py-3 cursor-pointer hover:bg-gray-100 select-none"><div className="flex items-center">Publicador <SortIcon campo="nome" ordenacao={ordenacao} /></div></th>
                                 <th className="px-6 py-3 text-center">Pregou?</th>
-                                <th onClick={() => manipularOrdenacao('status')} className="px-6 py-3 text-center cursor-pointer hover:bg-gray-100 select-none"><div className="flex items-center justify-center">Relatório <SortIcon campo="status" /></div></th>
-                                <th onClick={() => manipularOrdenacao('horas')} className="px-6 py-3 text-center cursor-pointer hover:bg-gray-100 select-none"><div className="flex items-center justify-center">Horas <SortIcon campo="horas" /></div></th>
-                                <th onClick={() => manipularOrdenacao('estudos')} className="px-6 py-3 text-center cursor-pointer hover:bg-gray-100 select-none"><div className="flex items-center justify-center">Estudos <SortIcon campo="estudos" /></div></th>
+                                <th onClick={() => manipularOrdenacao('status')} className="px-6 py-3 text-center cursor-pointer hover:bg-gray-100 select-none"><div className="flex items-center justify-center">Relatório <SortIcon campo="status" ordenacao={ordenacao} /></div></th>
+                                <th onClick={() => manipularOrdenacao('horas')} className="px-6 py-3 text-center cursor-pointer hover:bg-gray-100 select-none"><div className="flex items-center justify-center">Horas <SortIcon campo="horas" ordenacao={ordenacao} /></div></th>
+                                <th onClick={() => manipularOrdenacao('estudos')} className="px-6 py-3 text-center cursor-pointer hover:bg-gray-100 select-none"><div className="flex items-center justify-center">Estudos <SortIcon campo="estudos" ordenacao={ordenacao} /></div></th>
                                 <th className="px-6 py-3 text-center">Ação</th>
                             </tr>
                         </thead>
@@ -146,7 +151,7 @@ export default function AbaControleMensal({ dados }) {
     );
 }
 
-const BotaoFiltro = ({ ativo, onClick, icon: Icon, label, count, cor = 'gray' }) => {
+const BotaoFiltro = ({ ativo, onClick, icon, label, count, cor = 'gray' }) => {
     const styles = {
         gray:   ativo ? 'bg-gray-800 text-white border-gray-800' : 'text-gray-600 hover:bg-gray-200',
         red:    ativo ? 'bg-red-600 text-white border-red-600' : 'text-red-600 hover:bg-red-50',
@@ -154,7 +159,7 @@ const BotaoFiltro = ({ ativo, onClick, icon: Icon, label, count, cor = 'gray' })
         green:  ativo ? 'bg-green-600 text-white border-green-600' : 'text-green-600 hover:bg-green-50',
         orange: ativo ? 'bg-orange-500 text-white border-orange-500' : 'text-orange-600 hover:bg-orange-50'
     };
-    return <button onClick={onClick} className={`px-3 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 whitespace-nowrap border border-transparent ${styles[cor]} ${ativo ? 'shadow-md transform scale-105' : ''}`}><Icon size={14} /> {label} ({count})</button>;
+    return <button onClick={onClick} className={`px-3 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 whitespace-nowrap border border-transparent ${styles[cor]} ${ativo ? 'shadow-md transform scale-105' : ''}`}>{React.createElement(icon, { size: 14 })} {label} ({count})</button>;
 };
 
 const BotaoFiltroSimples = ({ ativo, onClick, label, count, icon: Icon }) => (

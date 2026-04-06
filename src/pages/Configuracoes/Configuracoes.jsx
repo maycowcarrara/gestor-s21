@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useForm } from 'react-hook-form';
 import { db } from '../../config/firebase';
 import { collection, getDocs, doc, getDoc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
@@ -6,7 +6,7 @@ import { Settings, Save, Plus, Trash2, Database, Link as LinkIcon, AlertCircle, 
 import toast from 'react-hot-toast';
 
 // Importação do sincronizador
-import { sincronizarSituacaoPublicadoresClient } from '../../utils/sincronizadorpublicadores';
+import { sincronizarSituacaoPublicadoresClient } from '../../utils/sincronizadorPublicadores';
 
 export default function Configuracoes() {
     const [loading, setLoading] = useState(true);
@@ -41,19 +41,7 @@ export default function Configuracoes() {
     };
     const anoServicoCalculado = getAnoServicoAutomatico();
 
-    useEffect(() => {
-        carregarConfig();
-
-        // Listener em Tempo Real para Usuários (segurança e UI atualizada)
-        const unsubscribe = onSnapshot(collection(db, "usuarios"), (snapshot) => {
-            const lista = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setUsuarios(lista);
-        });
-
-        return () => unsubscribe();
-    }, []);
-
-    const carregarConfig = async () => {
+    const carregarConfig = useCallback(async () => {
         try {
             const docRef = doc(db, "config", "geral");
             const docSnap = await getDoc(docRef);
@@ -81,7 +69,19 @@ export default function Configuracoes() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [setValue]);
+
+    useEffect(() => {
+        carregarConfig();
+
+        // Listener em Tempo Real para Usuários (segurança e UI atualizada)
+        const unsubscribe = onSnapshot(collection(db, "usuarios"), (snapshot) => {
+            const lista = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setUsuarios(lista);
+        });
+
+        return () => unsubscribe();
+    }, [carregarConfig]);
 
     // --- FUNÇÕES DE GRUPO ---
     const adicionarGrupo = () => {
@@ -136,6 +136,7 @@ export default function Configuracoes() {
                 await deleteDoc(doc(db, "usuarios", emailParaRemover));
                 toast.success("Acesso revogado.");
             } catch (error) {
+                console.error("Erro ao remover usuário:", error);
                 toast.error("Erro ao remover usuário.");
             }
         }
@@ -213,6 +214,7 @@ export default function Configuracoes() {
             toast.dismiss();
             toast.success("Backup baixado!");
         } catch (error) {
+            console.error("Erro ao gerar backup:", error);
             toast.dismiss();
             toast.error("Falha no backup.");
         }

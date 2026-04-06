@@ -1,13 +1,37 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, useDeferredValue, startTransition } from 'react';
 import { db } from '../../config/firebase';
 import { collection, getDocs, query, where, orderBy } from 'firebase/firestore';
-import { Printer, ChevronLeft, Download, Package, FileCheck, Search, Filter, X, ChevronDown, FileText } from 'lucide-react';
+import { Printer, ChevronLeft, Download, FileCheck, Search, Filter, X, ChevronDown, FileText } from 'lucide-react';
 import { Link } from 'react-router-dom';
-// Importamos as duas funções agora
-import { gerarZipS21, gerarPDFIndividual } from '../../utils/geradorPDF';
+import { isPublicadoresCacheFresh, readPublicadoresCache, writePublicadoresCache } from '../../utils/publicadoresCache';
+import { normalizarMesReferencia } from '../../utils/relatoriosDerivados';
+
+const firstDefined = (obj, paths) => {
+    for (const path of paths) {
+        const value = path.split('.').reduce((acc, key) => (acc == null ? undefined : acc[key]), obj);
+        if (value !== undefined && value !== null && value !== '') return value;
+    }
+    return undefined;
+};
+
+const calcAnoServicoFromMesRef = (mesRef) => {
+    if (!mesRef || !mesRef.includes('-')) return null;
+
+    const [anoStr, mesStr] = mesRef.split('-');
+    const ano = parseInt(anoStr, 10);
+    const mes = parseInt(mesStr, 10);
+
+    if (Number.isNaN(ano) || Number.isNaN(mes)) return null;
+    return mes >= 9 ? ano + 1 : ano;
+};
 
 export default function ImpressaoLote() {
-    const [anoReferencia, setAnoReferencia] = useState(2026);
+    const getAnoServicoAtual = () => {
+        const hoje = new Date();
+        return hoje.getMonth() >= 8 ? hoje.getFullYear() + 1 : hoje.getFullYear();
+    };
+
+    const [anoReferencia, setAnoReferencia] = useState(getAnoServicoAtual());
     const [dados, setDados] = useState([]);
     const [loading, setLoading] = useState(true);
     const [progresso, setProgresso] = useState(null);
@@ -16,16 +40,24 @@ export default function ImpressaoLote() {
     const [busca, setBusca] = useState("");
     const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
     const inputBuscaRef = useRef(null);
+    const buscaDiferida = useDeferredValue(busca);
 
     const [filtroGrupo, setFiltroGrupo] = useState("todos");
     const [filtroTipo, setFiltroTipo] = useState("todos");
     const [filtroSituacao, setFiltroSituacao] = useState("Ativo");
 
-    const anosParaExibir = [parseInt(anoReferencia), parseInt(anoReferencia) - 1, parseInt(anoReferencia) - 2];
+    const anosParaExibir = useMemo(
+        () => [parseInt(anoReferencia), parseInt(anoReferencia) - 1, parseInt(anoReferencia) - 2],
+        [anoReferencia]
+    );
 
-    useEffect(() => {
-        carregarTudo();
-    }, [anoReferencia]);
+    const chunkArray = (items, size = 10) => {
+        const chunks = [];
+        for (let i = 0; i < items.length; i += size) {
+            chunks.push(items.slice(i, i + size));
+        }
+        return chunks;
+    };
 
     useEffect(() => {
         const handleClickOutside = (event) => {
@@ -37,40 +69,86 @@ export default function ImpressaoLote() {
         return () => document.removeEventListener("mousedown", handleClickOutside);
     }, []);
 
-    const carregarTudo = async () => {
-        setLoading(true);
+    const normalizarPublicadores = useCallback((docs) => (
+        docs.map(docSnap => {
+            const pub = { id: docSnap.id, ...docSnap.data() };
+            if (pub.dados_eclesiasticos?.situacao === 'Removido') return null;
+            return { publicador: pub, relatoriosPorAno: {} };
+        }).filter(Boolean)
+    ), []);
+
+    const carregarPublicadores = useCallback(async (silent = false) => {
+        if (!silent) setLoading(true);
         try {
             const qPubs = query(collection(db, "publicadores"), orderBy("dados_pessoais.nome_completo"));
             const snapPubs = await getDocs(qPubs);
-
-            const qRels = query(collection(db, "relatorios"), where("ano_servico", "in", anosParaExibir));
-            const snapRels = await getDocs(qRels);
-
-            const mapaGlobal = {};
-            snapRels.forEach(doc => {
-                const r = doc.data();
-                const pubId = r.id_publicador;
-                const ano = r.ano_servico;
-                const mes = r.mes_referencia;
-                if (!mapaGlobal[pubId]) mapaGlobal[pubId] = {};
-                if (!mapaGlobal[pubId][ano]) mapaGlobal[pubId][ano] = {};
-                mapaGlobal[pubId][ano][mes] = r;
-            });
-
-            const listaCompleta = snapPubs.docs.map(doc => {
-                const pub = { id: doc.id, ...doc.data() };
-                if (pub.dados_eclesiasticos.situacao === 'Removido') return null;
-                const relatoriosDoPub = mapaGlobal[doc.id] || {};
-                return { publicador: pub, relatoriosPorAno: relatoriosDoPub };
-            }).filter(item => item !== null);
-
-            setDados(listaCompleta);
+            writePublicadoresCache(snapPubs.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+            setDados(normalizarPublicadores(snapPubs.docs));
         } catch (error) {
             console.error("Erro ao carregar lote:", error);
         } finally {
+            if (!silent) setLoading(false);
+        }
+    }, [normalizarPublicadores]);
+
+    useEffect(() => {
+        const cache = readPublicadoresCache();
+        if (cache?.value?.length) {
+            startTransition(() => {
+                setDados(normalizarPublicadores(cache.value.map(item => ({ id: item.id, data: () => item }))));
+                setLoading(false);
+            });
+        }
+
+        if (!cache?.value?.length || !isPublicadoresCacheFresh()) {
+            carregarPublicadores(!!cache?.value?.length);
+        } else {
             setLoading(false);
         }
-    };
+    }, [carregarPublicadores, normalizarPublicadores]);
+
+    const carregarRelatoriosSelecionados = useCallback(async (publicadorIds) => {
+        if (publicadorIds.length === 0) return {};
+
+        const chunks = chunkArray(publicadorIds, 10);
+        const consultas = chunks.flatMap((chunk) => ([
+            getDocs(query(collection(db, "relatorios"), where("id_publicador", "in", chunk))),
+            getDocs(query(collection(db, "relatorios"), where("idpublicador", "in", chunk))),
+            getDocs(query(collection(db, "relatorios"), where("publicador_id", "in", chunk)))
+        ]));
+
+        const snapshots = await Promise.all(consultas);
+        const mapaGlobal = {};
+        const vistos = new Set();
+
+        snapshots.forEach((snapshot) => {
+            snapshot.forEach((docSnap) => {
+                if (vistos.has(docSnap.id)) return;
+                vistos.add(docSnap.id);
+
+                const r = docSnap.data();
+                const pubId = firstDefined(r, ['id_publicador', 'idpublicador', 'publicador_id']);
+                const mes = normalizarMesReferencia(firstDefined(r, ['mes_referencia', 'mesreferencia', 'mes_ano']));
+                const ano = firstDefined(r, ['ano_servico', 'anoservico']) ?? calcAnoServicoFromMesRef(mes);
+
+                if (!pubId || !ano || !mes || !anosParaExibir.includes(Number(ano))) return;
+
+                if (!mapaGlobal[pubId]) mapaGlobal[pubId] = {};
+                if (!mapaGlobal[pubId][ano]) mapaGlobal[pubId][ano] = {};
+                mapaGlobal[pubId][ano][mes] = {
+                    ...r,
+                    id_publicador: pubId,
+                    idpublicador: pubId,
+                    ano_servico: Number(ano),
+                    anoservico: Number(ano),
+                    mes_referencia: mes,
+                    mesreferencia: mes
+                };
+            });
+        });
+
+        return mapaGlobal;
+    }, [anosParaExibir]);
 
     // --- LISTAS AUXILIARES ---
     const gruposDisponiveis = useMemo(() => {
@@ -82,39 +160,49 @@ export default function ImpressaoLote() {
         if (!dados) return [];
         return dados
             .map(d => d.publicador.dados_pessoais.nome_completo)
-            .filter(nome => nome.toLowerCase().includes(busca.toLowerCase()))
+            .filter(nome => nome.toLowerCase().includes(buscaDiferida.toLowerCase()))
             .slice(0, 8);
-    }, [dados, busca]);
+    }, [dados, buscaDiferida]);
 
     // --- FILTRAGEM ---
-    const dadosFiltrados = dados.filter(item => {
+    const dadosFiltrados = useMemo(() => dados.filter(item => {
         const pub = item.publicador;
         const pNome = pub.dados_pessoais.nome_completo.toLowerCase();
         const pGrupo = pub.dados_eclesiasticos.grupo_campo;
         const pTipo = pub.dados_eclesiasticos.pioneiro_tipo;
         const pSit = pub.dados_eclesiasticos.situacao;
 
-        if (busca && !pNome.includes(busca.toLowerCase())) return false;
+        if (buscaDiferida && !pNome.includes(buscaDiferida.toLowerCase())) return false;
         if (filtroGrupo !== 'todos' && pGrupo !== filtroGrupo) return false;
         if (filtroSituacao !== 'todos' && pSit !== filtroSituacao) return false;
         if (filtroTipo === 'pr' && pTipo !== 'Pioneiro Regular') return false;
         if (filtroTipo === 'pub' && pTipo === 'Pioneiro Regular') return false;
 
         return true;
-    });
+    }), [buscaDiferida, dados, filtroGrupo, filtroSituacao, filtroTipo]);
 
     // --- LÓGICA DE DOWNLOAD INTELIGENTE ---
     const handleDownload = async () => {
         if (dadosFiltrados.length === 0) return;
+        try {
+            setProgresso({ atual: 0, total: Math.max(dadosFiltrados.length, 1), msg: 'Carregando relatórios', arquivo: 'Preparando seleção...' });
+            const publicadorIds = dadosFiltrados.map(item => item.publicador.id);
+            const relatoriosMap = await carregarRelatoriosSelecionados(publicadorIds);
+            const dadosComRelatorios = dadosFiltrados.map(item => ({
+                ...item,
+                relatoriosPorAno: relatoriosMap[item.publicador.id] || {}
+            }));
 
-        if (dadosFiltrados.length === 1) {
-            // CASO 1: Apenas um registro -> Baixa PDF direto
-            const item = dadosFiltrados[0];
-            gerarPDFIndividual(item.publicador, item.relatoriosPorAno, anosParaExibir);
-        } else {
-            // CASO 2: Múltiplos registros -> Gera ZIP
-            setProgresso({ atual: 0, total: dadosFiltrados.length, nome: 'Iniciando...' });
-            await gerarZipS21(dadosFiltrados, anosParaExibir, setProgresso);
+            if (dadosComRelatorios.length === 1) {
+                const { gerarPDFIndividual } = await import('../../utils/s21Pdf');
+                const item = dadosComRelatorios[0];
+                gerarPDFIndividual(item.publicador, item.relatoriosPorAno, anosParaExibir);
+            } else {
+                const { gerarZipS21 } = await import('../../utils/geradorZipS21');
+                setProgresso({ atual: 0, total: dadosComRelatorios.length, nome: 'Iniciando...' });
+                await gerarZipS21(dadosComRelatorios, anosParaExibir, setProgresso);
+            }
+        } finally {
             setProgresso(null);
         }
     };
@@ -275,11 +363,16 @@ export default function ImpressaoLote() {
                                     const pub = item.publicador;
                                     return (
                                         <tr key={pub.id} className="hover:bg-gray-50 transition">
-                                            <td className="px-6 py-3 font-medium text-gray-800 flex items-center gap-2">
-                                                <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-xs">
-                                                    {pub.dados_pessoais.nome_completo.charAt(0)}
-                                                </div>
-                                                {pub.dados_pessoais.nome_completo}
+                                            <td className="px-6 py-3 font-medium text-gray-800">
+                                                <Link
+                                                    to={`/publicadores/${pub.id}`}
+                                                    className="inline-flex items-center gap-2 rounded-md hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                                                >
+                                                    <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-xs">
+                                                        {pub.dados_pessoais.nome_completo.charAt(0)}
+                                                    </div>
+                                                    <span className="hover:underline">{pub.dados_pessoais.nome_completo}</span>
+                                                </Link>
                                             </td>
                                             <td className="px-6 py-3 text-gray-600">{pub.dados_eclesiasticos.grupo_campo}</td>
                                             <td className="px-6 py-3 text-gray-600">

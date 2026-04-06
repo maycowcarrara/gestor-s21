@@ -4,10 +4,21 @@ import { Link } from 'react-router-dom';
 import { CloudDownload, Link as LinkIcon, AlertTriangle, Save } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { db } from '../../../config/firebase';
-import { doc, writeBatch, Timestamp, increment, serverTimestamp } from 'firebase/firestore';
+import { doc, writeBatch, Timestamp } from 'firebase/firestore';
 import { buscarRelatoriosCSV } from '../../../utils/importadorService';
 // Importação do Sincronizador de Status
-import { sincronizarSituacaoPublicadoresClient } from '../../../utils/sincronizadorpublicadores';
+import { sincronizarSituacaoPublicadoresClient } from '../../../utils/sincronizadorPublicadores';
+import {
+    recalcularEstatisticasS1MesesClient,
+    sincronizarUltimoRelatorioPublicadoresClient
+} from '../../../utils/relatoriosDerivados';
+
+const normalizarNomeImportacao = (nome) => String(nome || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 
 export default function AbaImportacao({ mesReferencia, listaPublicadores, gruposConfig, onImportSuccess }) {
     const [grupoSelecionado, setGrupoSelecionado] = useState("");
@@ -24,9 +35,20 @@ export default function AbaImportacao({ mesReferencia, listaPublicadores, grupos
                 return;
             }
             const dadosBrutos = await buscarRelatoriosCSV(config.link_csv);
+            const publicadoresPorNomeNormalizado = new Map(
+                listaPublicadores
+                    .map((publicador) => [
+                        normalizarNomeImportacao(publicador.dados_pessoais?.nome_completo),
+                        publicador
+                    ])
+                    .filter(([nome]) => nome)
+            );
             const dadosMapeados = dadosBrutos.map(row => {
-                const termo = row.nome?.toLowerCase().trim();
-                const match = listaPublicadores.find(p => p.dados_pessoais.nome_completo.toLowerCase() === termo);
+                const termo = String(row.nome || '').toLowerCase().trim();
+                const termoNormalizado = normalizarNomeImportacao(row.nome);
+                const match = listaPublicadores.find(
+                    (publicador) => publicador.dados_pessoais.nome_completo.toLowerCase() === termo
+                ) || publicadoresPorNomeNormalizado.get(termoNormalizado);
                 return {
                     nomeCSV: row.nome,
                     tipoCSV: row.tipo, // Mantém a informação original da planilha
@@ -60,12 +82,14 @@ export default function AbaImportacao({ mesReferencia, listaPublicadores, grupos
         setProcessandoImportacao(true);
         const batch = writeBatch(db);
         let contagem = 0;
-
-        let somaHorasPub = 0, somaEstudosPub = 0, relatoriosPub = 0;
-        let somaHorasAux = 0, somaEstudosAux = 0, relatoriosAux = 0;
-        let somaHorasReg = 0, somaEstudosReg = 0, relatoriosReg = 0;
+        const idsImportados = new Set();
 
         try {
+            const [anoStr, mesStr] = mesReferencia.split('-');
+            const anoCalendario = parseInt(anoStr, 10);
+            const mesNumero = parseInt(mesStr, 10);
+            const anoServico = mesNumero >= 9 ? anoCalendario + 1 : anoCalendario;
+
             for (const item of dadosImportacao) {
                 if (!item.matchId) continue;
                 const publicador = listaPublicadores.find(p => p.id === item.matchId);
@@ -95,18 +119,34 @@ export default function AbaImportacao({ mesReferencia, listaPublicadores, grupos
                 const horasCampo = Number(item.horas) || 0;
                 const horasBonus = Number(item.horasBonus) || 0;
                 const estudos = Number(item.estudos) || 0;
+                const nomeSnapshot = publicador.dados_pessoais?.nome_completo || item.nomeCSV || "";
 
                 const dadosRelatorio = {
+                    idpublicador: item.matchId,
+                    mesreferencia: mesReferencia,
+                    anoservico: anoServico,
+                    datacriacao: Timestamp.now(),
+                    dataatualizacao: Timestamp.now(),
+                    atualizadoem: Timestamp.now(),
+                    nome_publicador: nomeSnapshot,
+
                     id_publicador: item.matchId,
                     mes_referencia: mesReferencia,
+                    ano_servico: anoServico,
+                    data_criacao: Timestamp.now(),
+                    data_atualizacao: Timestamp.now(),
                     atividade: {
                         participou: true,
                         horas: horasCampo,
+                        bonushoras: horasBonus,
                         bonus_horas: horasBonus,
                         estudos: estudos,
                         observacoes: item.observacoes,
+                        tipopioneiromes: tipoNoMes,
                         tipo_pioneiro_mes: tipoNoMes, // Agora vai salvar corretamente
-                        pioneiro_auxiliar_mes: isAuxiliar // A flag booleana correta
+                        pioneiroauxiliarmes: isAuxiliar,
+                        pioneiro_auxiliar_mes: isAuxiliar,
+                        nome_snapshot: nomeSnapshot
                     },
                     atualizado_em: Timestamp.now(),
                     origem: "importacao_csv"
@@ -114,42 +154,16 @@ export default function AbaImportacao({ mesReferencia, listaPublicadores, grupos
 
                 batch.set(relRef, dadosRelatorio, { merge: true });
 
-                // Soma estatísticas
-                if (['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(tipoNoMes)) {
-                    somaHorasReg += horasCampo; somaEstudosReg += estudos; relatoriosReg += 1;
-                } else if (isAuxiliar) {
-                    somaHorasAux += horasCampo; somaEstudosAux += estudos; relatoriosAux += 1;
-                } else {
-                    somaHorasPub += horasCampo; somaEstudosPub += estudos; relatoriosPub += 1;
-                }
-
                 contagem++;
-            }
-
-            if (contagem > 0) {
-                const statRef = doc(db, "estatisticas_s1", mesReferencia);
-                batch.set(statRef, {
-                    mes: mesReferencia,
-                    pubs: {
-                        horas: increment(somaHorasPub),
-                        estudos: increment(somaEstudosPub),
-                        relatorios: increment(relatoriosPub)
-                    },
-                    aux: {
-                        horas: increment(somaHorasAux),
-                        estudos: increment(somaEstudosAux),
-                        relatorios: increment(relatoriosAux)
-                    },
-                    reg: {
-                        horas: increment(somaHorasReg),
-                        estudos: increment(somaEstudosReg),
-                        relatorios: increment(relatoriosReg)
-                    },
-                    updatedAt: serverTimestamp()
-                }, { merge: true });
+                idsImportados.add(item.matchId);
             }
 
             await batch.commit();
+
+            if (contagem > 0) {
+                await recalcularEstatisticasS1MesesClient([mesReferencia]);
+                await sincronizarUltimoRelatorioPublicadoresClient([...idsImportados]);
+            }
 
             toast.loading("Analisando e atualizando status dos publicadores...", { id: "sync_import" });
             try {

@@ -1,18 +1,13 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import JSZip from 'jszip';
-import ExcelJS from 'exceljs';
-import { saveAs } from 'file-saver';
 
-// --- HELPERS ---
 const limparTexto = (texto) => {
     if (!texto) return "sem_nome";
     return texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
 };
 
-// Busca os dados em pub._raw (versão completa do banco) 
 const getContatos = (pub) => {
-    const raw = pub._raw || pub; // Se veio da tela de lista, usa o _raw. Se não, usa o próprio pub.
+    const raw = pub._raw || pub;
     const dp = raw.dados_pessoais || raw.dadospessoais || {};
     const contatos = dp.contatos || {};
 
@@ -24,7 +19,6 @@ const getContatos = (pub) => {
     };
 };
 
-// Busca os dados em pub._raw e melhora a formatação do endereço
 const getEndereco = (pub) => {
     const raw = pub._raw || pub;
     const dp = raw.dados_pessoais || raw.dadospessoais || {};
@@ -38,13 +32,11 @@ const getEndereco = (pub) => {
         const uf = end.uf || '';
 
         if (!rua) return '-';
-        // Formato: Rua, Numero - Bairro \n Cidade/UF
         return `${rua}${numero}${bairro}\n${cidade}/${uf}`;
     }
     return end || '-';
 };
 
-// NOVO HELPER: Calcula a exibição exata da Situação
 const getSituacaoDisplay = (e) => {
     const situacao = e.situacao || 'Ativo';
     const regularidade = e.regularidade || 'Regular';
@@ -55,9 +47,7 @@ const getSituacaoDisplay = (e) => {
     return situacao;
 };
 
-// --- FUNÇÃO CORE (REUTILIZÁVEL) PARA DESENHAR O S-21 NO PDF ---
 const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
-    // Helper para desenhar checkbox quadrado com "X" se marcado
     const drawCheckbox = (x, y, label, checked, color = [0, 0, 0]) => {
         doc.setDrawColor(0);
         doc.setFillColor(255, 255, 255);
@@ -78,12 +68,10 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
         doc.setTextColor(0);
     };
 
-    // Loop pelos Anos
-    for (let j = 0; j < anosParaExibir.length; j++) {
+    for (let j = 0; j < anosParaExibir.length; j += 1) {
         const anoServico = anosParaExibir[j];
         if (j > 0) doc.addPage();
 
-        // CABEÇALHO
         doc.setFont("helvetica", "bold");
         doc.setFontSize(12);
         doc.text("REGISTRO DE PUBLICADOR DA CONGREGAÇÃO", 105, 12, { align: "center" });
@@ -98,7 +86,6 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
         doc.setLineWidth(0.5);
         doc.line(14, 20, 196, 20);
 
-        // DADOS PESSOAIS
         const dp = publicador.dados_pessoais || {};
         const de = publicador.dados_eclesiasticos || {};
 
@@ -109,7 +96,7 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
 
         doc.setFont("helvetica", "bold"); doc.text("Data de nascimento:", 120, y);
         doc.setFont("helvetica", "normal");
-        if (dp.data_nascimento) doc.text(new Date(dp.data_nascimento + 'T12:00:00').toLocaleDateString('pt-BR'), 160, y);
+        if (dp.data_nascimento) doc.text(new Date(`${dp.data_nascimento}T12:00:00`).toLocaleDateString('pt-BR'), 160, y);
 
         y += 7;
         const genero = dp.genero || "Masculino";
@@ -118,7 +105,7 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
 
         doc.setFont("helvetica", "bold"); doc.text("Data de batismo:", 120, y);
         doc.setFont("helvetica", "normal");
-        if (de.data_batismo) doc.text(new Date(de.data_batismo + 'T12:00:00').toLocaleDateString('pt-BR'), 150, y);
+        if (de.data_batismo) doc.text(new Date(`${de.data_batismo}T12:00:00`).toLocaleDateString('pt-BR'), 150, y);
         else doc.text(de.batizado ? "Sim (s/ data)" : "Não", 150, y);
 
         y += 7;
@@ -139,22 +126,19 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
         drawCheckbox(55, y - 3, "Missionário em campo", tipoP === "Missionário");
 
         if (privs.includes("Varão Habilitado")) {
-            drawCheckbox(140, y - 3, "Varão Habilitado", true, [22, 163, 74]); // Verde
+            drawCheckbox(140, y - 3, "Varão Habilitado", true, [22, 163, 74]);
         }
 
         y += 8;
         doc.setFontSize(8);
         doc.setTextColor(100);
 
-        // Pega o contato e endereço formatado da origem real
         const contatosS21 = getContatos(publicador);
-        // O replace tira o \n que eu coloquei para quebrar linha na lista, deixando reto no cartão
         doc.text(`Endereço: ${getEndereco(publicador).replace(/\n/g, ' - ')} | Tel: ${contatosS21.celular}`, 14, y);
         doc.setTextColor(0);
 
-        // TABELA
         const colunas = [
-            "Ano de serviço",
+            `Ano de serviço\n${anoServico}`,
             "Participou no ministério",
             "Estudos bíblicos",
             "Pioneiro auxiliar",
@@ -164,7 +148,9 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
 
         const relsDoAno = relatoriosPorAno[anoServico] || {};
         const linhas = [];
-        let totMeses = 0; let totEstudos = 0; let totHoras = 0;
+        let totMeses = 0;
+        let totEstudos = 0;
+        let totHoras = 0;
 
         const addMes = (mesNum, anoRef) => {
             const chave = `${anoRef}-${mesNum.toString().padStart(2, '0')}`;
@@ -183,7 +169,7 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
             if (r && r.atividade) {
                 if (r.atividade.participou) {
                     part = "Sim";
-                    totMeses++;
+                    totMeses += 1;
                 } else {
                     part = "Não";
                 }
@@ -209,8 +195,8 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
             linhas.push([labelMes, part, est, aux, horas, obs]);
         };
 
-        for (let m = 9; m <= 12; m++) addMes(m, anoServico - 1);
-        for (let m = 1; m <= 8; m++) addMes(m, anoServico);
+        for (let m = 9; m <= 12; m += 1) addMes(m, anoServico - 1);
+        for (let m = 1; m <= 8; m += 1) addMes(m, anoServico);
 
         linhas.push([
             { content: "Total", styles: { fontStyle: 'bold', fillColor: [240, 240, 240] } },
@@ -241,56 +227,18 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
     }
 };
 
-// --- FUNÇÃO 1: GERAR PDF INDIVIDUAL ---
-export const gerarPDFIndividual = (publicador, relatoriosPorAno, anosParaExibir) => {
+export const criarDocumentoS21 = (publicador, relatoriosPorAno, anosParaExibir) => {
     const doc = new jsPDF();
     desenharS21(doc, publicador, relatoriosPorAno, anosParaExibir);
+    return doc;
+};
+
+export const gerarPDFIndividual = (publicador, relatoriosPorAno, anosParaExibir) => {
+    const doc = criarDocumentoS21(publicador, relatoriosPorAno, anosParaExibir);
     const nomePub = publicador.dados_pessoais.nome_completo || "Irmão";
     doc.save(`S21_${limparTexto(nomePub)}.pdf`);
 };
 
-// --- FUNÇÃO 2: GERAR ZIP EM LOTE ---
-export const gerarZipS21 = async (listaPublicadores, anosParaExibir, setProgresso) => {
-    let callbackProgresso = setProgresso;
-    let anos = anosParaExibir;
-    if (typeof anosParaExibir === 'function') {
-        callbackProgresso = anosParaExibir;
-        anos = [2026];
-    }
-
-    const zip = new JSZip();
-
-    for (let i = 0; i < listaPublicadores.length; i++) {
-        const item = listaPublicadores[i];
-        const pub = item.publicador;
-        const rels = item.relatoriosPorAno || item.relatorios || {};
-
-        const nomePub = pub.dados_pessoais.nome_completo || "Irmão";
-        let prefixo = "grupo";
-        const tipo = pub.dados_eclesiasticos?.pioneiro_tipo;
-        const grupo = pub.dados_eclesiasticos?.grupo_campo;
-
-        if (tipo && (tipo.includes('Pioneiro Regular') || tipo.includes('Especial'))) prefixo = "pioneiro";
-        else if (grupo) prefixo = limparTexto(grupo);
-
-        const nomeArquivo = `${prefixo}-${limparTexto(nomePub)}.pdf`;
-
-        if (callbackProgresso) {
-            callbackProgresso({ atual: i + 1, total: listaPublicadores.length, nome: nomePub, arquivo: nomeArquivo });
-        }
-
-        const doc = new jsPDF();
-        desenharS21(doc, pub, rels, anos);
-        zip.file(nomeArquivo, doc.output('blob'));
-        await new Promise(r => setTimeout(r, 5));
-    }
-
-    if (callbackProgresso) callbackProgresso({ msg: "Compactando arquivos..." });
-    const content = await zip.generateAsync({ type: "blob" });
-    saveAs(content, `S21_Lote_${new Date().toISOString().slice(0, 10)}.zip`);
-};
-
-// --- FUNÇÃO 3: PDF LISTA GERAL ---
 export const gerarPDFListaCompleta = (publicadores) => {
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     const dataAtual = new Date().toLocaleDateString('pt-BR');
@@ -300,11 +248,9 @@ export const gerarPDFListaCompleta = (publicadores) => {
     doc.setFontSize(9);
     doc.text(`Total: ${publicadores.length} registros | Data: ${dataAtual}`, 14, 15);
 
-    // Mudamos o nome da coluna para refletir que a Situação também está ali
     const colunas = ["Nome / Grupo", "Situação / Tipo / Privilégio", "Contatos", "Endereço", "Emergência", "Datas Importantes"];
 
     const linhas = publicadores.map(pub => {
-        // Usa o objeto original para garantir que as datas batam mesmo se não estiverem no topo
         const raw = pub._raw || pub;
         const pRaw = raw.dados_pessoais || raw.dadospessoais || {};
         const eRaw = raw.dados_eclesiasticos || raw.dadoseclesiasticos || {};
@@ -314,7 +260,7 @@ export const gerarPDFListaCompleta = (publicadores) => {
 
         const c = getContatos(pub);
         const endereco = getEndereco(pub);
-        const formatData = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('pt-BR') : '-';
+        const formatData = (d) => d ? new Date(`${d}T12:00:00`).toLocaleDateString('pt-BR') : '-';
 
         const datas = [
             `Nasc: ${formatData(p.data_nascimento || pRaw.data_nascimento)}`,
@@ -322,7 +268,6 @@ export const gerarPDFListaCompleta = (publicadores) => {
             (e.data_inicio || eRaw.data_inicio) ? `Chegada: ${formatData(e.data_inicio || eRaw.data_inicio)}` : null
         ].filter(Boolean).join('\n');
 
-        // AJUSTE: Combina a Situação, Tipo de Pioneiro e Privilégios.
         const situacaoDisplay = getSituacaoDisplay(e);
         let privilegiosText = e.pioneiro_tipo ? `${e.pioneiro_tipo}\n` : '';
         if (e.privilegios && e.privilegios.length > 0) {
@@ -356,52 +301,4 @@ export const gerarPDFListaCompleta = (publicadores) => {
     });
 
     doc.save(`Lista_Publicadores_${dataAtual.replace(/\//g, '-')}.pdf`);
-};
-
-// --- FUNÇÃO 4: EXCEL GERAL ---
-export const gerarExcelListaCompleta = async (publicadores) => {
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Publicadores');
-
-    worksheet.columns = [
-        { header: 'Nome', key: 'nome', width: 30 }, { header: 'Grupo', key: 'grupo', width: 20 }, { header: 'Situação', key: 'situacao', width: 10 },
-        { header: 'Privilégios', key: 'priv', width: 20 }, { header: 'Tipo Pioneiro', key: 'pioneiro', width: 15 },
-        { header: 'Celular', key: 'celular', width: 15 }, { header: 'E-mail', key: 'email', width: 25 },
-        { header: 'Endereço', key: 'endereco', width: 40 }, { header: 'Dt Nasc', key: 'nasc', width: 12 },
-        { header: 'Dt Batismo', key: 'batismo', width: 12 }, { header: 'Dt Chegada', key: 'chegada', width: 12 },
-        { header: 'Emergência', key: 'emerg_nome', width: 20 }, { header: 'Tel Emerg', key: 'emerg_tel', width: 15 }
-    ];
-    worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2980B9' } };
-
-    publicadores.forEach(pub => {
-        const raw = pub._raw || pub;
-        const pRaw = raw.dados_pessoais || raw.dadospessoais || {};
-        const eRaw = raw.dados_eclesiasticos || raw.dadoseclesiasticos || {};
-
-        const p = pub.dados_pessoais || {};
-        const e = pub.dados_eclesiasticos || {};
-        const c = getContatos(pub);
-        const d = (val) => val ? new Date(val + 'T12:00:00') : null;
-
-        worksheet.addRow({
-            nome: p.nome_completo,
-            grupo: e.grupo_campo,
-            situacao: getSituacaoDisplay(e), // Usa o novo helper para colocar 'Irregular' se for o caso
-            priv: e.privilegios?.join(', '),
-            pioneiro: e.pioneiro_tipo,
-            celular: c.celular,
-            email: c.email,
-            endereco: getEndereco(pub).replace(/\n/g, ' - '), // Limpa a quebra de linha para o Excel
-            nasc: d(p.data_nascimento || pRaw.data_nascimento),
-            batismo: d(e.data_batismo || eRaw.data_batismo),
-            chegada: d(e.data_inicio || eRaw.data_inicio),
-            emerg_nome: c.emergencia_nome,
-            emerg_tel: c.emergencia_tel
-        });
-    });
-
-    const buffer = await workbook.xlsx.writeBuffer();
-    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    saveAs(blob, `Dados_Secretaria_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.xlsx`);
 };

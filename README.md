@@ -1,131 +1,152 @@
-# 📂 Gestor S-21 Digital
+# Gestor S-21 Digital
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue?style=for-the-badge)
-![Status](https://img.shields.io/badge/status-active-success?style=for-the-badge)
-![License](https://img.shields.io/badge/license-MIT-gray?style=for-the-badge)
+Aplicacao web em React + Vite para gestao de publicadores, relatorios de campo, assistencia das reunioes e emissao de documentos S-21/S-88 usando Firebase como backend.
 
-![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
-![Vite](https://img.shields.io/badge/Vite-646CFF?style=for-the-badge&logo=vite&logoColor=white)
-![Firebase](https://img.shields.io/badge/Firebase-FFCA28?style=for-the-badge&logo=firebase&logoColor=black)
-![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)
-![PWA](https://img.shields.io/badge/PWA-Ready-purple?style=for-the-badge&logo=pwa&logoColor=white)
+## Visao geral
 
-> **Uma solução moderna, segura e eficiente para a gestão de secretarias de congregações.**
-> Substitua o papel pelo digital com controle de publicadores, relatórios automatizados e geração de cartões S-21.
+O projeto foi pensado para uso interno de secretaria/congregacao e hoje cobre estes fluxos principais:
 
-## 🌟 Funcionalidades Principais
+- login com Google e controle de acesso pela colecao `usuarios`
+- painel com indicadores de publicadores, estudos e assistencia
+- cadastro, edicao, filtros e exportacao de publicadores
+- lancamento manual de relatorios mensais
+- importacao de relatorios por CSV a partir de links configurados por grupo
+- consolidacao de totais S-1
+- controle de assistencia e emissao de S-88 em PDF
+- impressao individual ou em lote de cartoes S-21
+- backup JSON da base pelo painel de configuracoes
 
-### 1. Gestão de Publicadores
+## Stack
 
-* **Cadastro Completo:** Dados pessoais, contatos e dados eclesiásticos.
-* **Classificação Inteligente:** Identificação automática de Pioneiros (Regulares/Auxiliares/Especiais) e Grupos de Campo.
-* **Status:** Controle de Ativos, Inativos e Removidos.
+- React 19
+- Vite 7
+- React Router 7
+- Firebase Auth + Firestore
+- Tailwind CSS 4
+- Recharts
+- jsPDF, jsPDF Autotable, JSZip e ExcelJS
+- vite-plugin-pwa
 
-### 2. Relatórios e Totais (S-1)
+## Estrutura principal
 
-* **Lançamento Rápido:** Interface otimizada para lançar relatórios mensais rapidamente.
-* **Cálculo Automático S-1:** Gera os números exatos para o site JW.ORG (Total de Publicadores, Médias, Pioneiros, etc).
-* **Histórico:** Visualize o desempenho da congregação mês a mês.
+```text
+src/
+  components/Relatorios/   modais e componentes de relatorio
+  config/                  inicializacao do Firebase
+  contexts/                autenticacao e permissoes
+  pages/
+    Configuracoes/
+    Publicadores/
+    Relatorios/
+    Reunioes/
+  utils/                   PDF, importacao CSV, normalizacao e sincronizacao
+scripts/
+  deploy.js                bump de versao + build + deploy
+public/                    icones e screenshots do PWA
+```
 
-### 3. Cartões S-21 (Geração de Documentos)
+## Colecoes usadas no Firestore
 
-* **Visualização Fiel:** Layout idêntico ao cartão físico S-21.
-* **PDF Vetorial:** Geração de arquivos PDF extremamente leves (aprox. 5kb) usando tecnologia vetorial.
-* **Exportação em Lote (.ZIP):** Baixe de uma só vez os cartões de **todos** os publicadores, organizados e nomeados automaticamente (Ex: `pioneiro_regular-joao_silva.pdf`).
+O frontend espera, no minimo, estas colecoes/documentos:
 
-### 4. Controle de Reuniões
+- `usuarios/{email}`: controle de acesso e papel (`admin` ou `comum`)
+- `publicadores/{id}`: dados pessoais e eclesiasticos
+- `relatorios/{mes_idPublicador}`: relatorios mensais
+- `assistencia/{data_tipo}`: lancamentos de reunioes
+- `estatisticas_s1/{YYYY-MM}`: consolidado mensal do S-1
+- `estatisticas_assistencia/{YYYY-MM}`: medias mensais de assistencia
+- `config/geral`: dados da congregacao, grupos e dias de reuniao
 
-* **Assistência:** Lançamento de assistência às reuniões (Meio de Semana e Fim de Semana).
-* **Médias:** Cálculo automático de médias mensais.
+## Controle de acesso
 
-### 5. Experiência Mobile (PWA)
+- Todo usuario faz login com Google.
+- O acesso so e liberado se existir um documento em `usuarios/{email-em-minusculas}`.
+- Usuarios com `papel: "admin"` podem cadastrar/editar publicadores, importar relatorios, acessar configuracoes, manutencao e impressao em lote.
+- Usuarios com `papel: "comum"` ficam restritos a consultas e telas liberadas pelo app.
 
-* **Instalável:** Funciona como um aplicativo nativo Android/iOS.
-* **Offline First:** Cache inteligente para carregamento instantâneo.
-* **Responsivo:** Interface adaptada para celulares, tablets e desktops.
+## Requisitos
 
----
+- Node.js 20 ou superior
+- npm 10 ou superior
+- projeto Firebase com Authentication (Google) e Firestore habilitados
+- Firebase CLI autenticado para usar o deploy automatizado
 
-## 🛠️ Tecnologias e Arquitetura
+## Variaveis de ambiente
 
-O projeto utiliza uma stack moderna focada em performance e escalabilidade:
+Crie um arquivo `.env` na raiz com as credenciais web do Firebase:
 
-* **Frontend:** [React.js](https://reactjs.org/) (Hooks, Context API).
-* **Build Tool:** [Vite](https://vitejs.dev/) (Para desenvolvimento ultrarrápido).
-* **Estilização:** [Tailwind CSS v4](https://tailwindcss.com/) (Design responsivo e tema customizado).
-* **Backend & Database:** [Google Firebase](https://firebase.google.com/)
-  * **Firestore:** Banco de dados NoSQL em tempo real.
-  * **Authentication:** Gestão de usuários segura.
-  * **Hosting:** Hospedagem global rápida.
-* **Geração de PDF:** `jspdf` + `jspdf-autotable` (Renderização programática de tabelas e textos).
-* **Compactação:** `jszip` (Para download de múltiplos arquivos).
-* **Ícones:** `lucide-react`.
+```env
+VITE_API_KEY=
+VITE_AUTH_DOMAIN=
+VITE_PROJECT_ID=
+VITE_STORAGE_BUCKET=
+VITE_MESSAGING_SENDER_ID=
+VITE_APP_ID=
+```
 
----
+## Como rodar
 
-## 🚀 Como Rodar o Projeto
+```bash
+npm install
+npm run dev
+```
 
-### Pré-requisitos
+Aplicacao local padrao: `http://localhost:5173`
 
-* Node.js (v18 ou superior)
-* Conta no Google Firebase
+## Scripts disponiveis
 
-### Passo a Passo
+```bash
+npm run dev
+npm run build
+npm run lint
+npm run preview
+npm run deploy
+```
 
-1. **Clone o repositório**
+### O que faz `npm run deploy`
 
-   ```bash
-   git clone [https://github.com/SEU-USUARIO/gestor-s21.git](https://github.com/SEU-USUARIO/gestor-s21.git)
-   cd gestor-s21
-   ```
-2. **Instale as dependências**
+O script em [`scripts/deploy.js`](/C:/Projetos/gestor-s21/scripts/deploy.js):
 
-   ```bash
-   npm install
-   ```
-3. **Configuração do Ambiente (.env)**
-   Crie um arquivo `.env` na raiz do projeto e configure suas chaves do Firebase:
+1. incrementa a versao patch em `package.json`
+2. cria commit dessa versao
+3. executa `git push`
+4. roda `npm run build`
+5. executa `firebase deploy`
 
-   ```env
-   VITE_API_KEY=sua_api_key_aqui
-   VITE_AUTH_DOMAIN=seu-projeto.firebaseapp.com
-   VITE_PROJECT_ID=seu-projeto-id
-   VITE_STORAGE_BUCKET=seu-projeto.appspot.com
-   VITE_MESSAGING_SENDER_ID=seu_sender_id
-   VITE_APP_ID=seu_app_id
-   ```
-4. **Execute em modo de desenvolvimento**
+Use esse fluxo apenas quando o repositorio estiver pronto para publicacao.
 
-   ```bash
-   npm run dev
-   ```
-5. **Acesse no navegador**
-   O projeto rodará geralmente em `http://localhost:5173`.
+## PWA
 
----
+O app usa `vite-plugin-pwa` com:
 
-## 🔐 Segurança
+- manifest configurado para instalacao
+- `registerType: "autoUpdate"`
+- screenshots para a UI de instalacao
+- cache gerado pelo Workbox no build de producao
 
-O sistema implementa regras de segurança estritas no **Firestore (Firestore Rules)**:
+## Exportacoes
 
-1. **Autenticação Obrigatória:** Apenas usuários logados podem ler/escrever.
-2. **Controle de Acesso (RBAC):** Existe uma coleção `acessos` onde o ID do documento deve ser igual ao e-mail do usuário. Apenas usuários listados nesta coleção têm permissão de acesso aos dados da congregação.
+O sistema atualmente gera:
 
----
+- PDF individual S-21
+- ZIP com varios S-21
+- PDF da lista geral de publicadores
+- Excel da lista geral de publicadores
+- PDF S-88 por ano de servico
+- backup completo em JSON
 
-## 📱 Transformando em App (PWA)
+## Observacoes importantes
 
-Para instalar no celular:
+- O repositorio nao inclui arquivo de regras do Firestore; a seguranca efetiva depende da configuracao do projeto Firebase.
+- Existe compatibilidade parcial com campos legados no frontend (`dadospessoais`, `dadoseclesiasticos`, `mesreferencia`, `idpublicador` etc.).
+- O build de producao funciona no estado atual; o lint ainda precisa de ajustes para ignorar arquivos gerados e alguns avisos/regras especificas do projeto.
 
-* **Android (Chrome):** Acesse o site -> Toque nos 3 pontos -> "Instalar aplicativo".
-* **iOS (Safari):** Acesse o site -> Botão Compartilhar -> "Adicionar à Tela de Início".
+## Screenshots
 
-## 📜 Licença e Aviso Legal
+Desktop:
 
-Este projeto é um software independente desenvolvido para auxílio pessoal na organização de tarefas secretariais.
-**Não possui vínculo oficial com a Watch Tower Bible and Tract Society.**
-O uso, armazenamento e proteção dos dados inseridos são de total responsabilidade do usuário local, em conformidade com a LGPD (Lei Geral de Proteção de Dados).
+![Dashboard desktop](/C:/Projetos/gestor-s21/public/screenshot-desktop.png)
 
----
+Mobile:
 
-Desenvolvido com 💙 por **Maycow**
+![Dashboard mobile](/C:/Projetos/gestor-s21/public/screenshot-mobile.png)

@@ -8,35 +8,32 @@ import {
     Star, ArrowLeft, Pencil, AlertTriangle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth } from '../../contexts/auth-context';
 
 // utils (conforme combinado)
 import { normalizarSituacao } from '../../utils/normalizadores';
+
+const getNested = (obj, path) => {
+    try {
+        return path.split('.').reduce((acc, k) => (acc ? acc[k] : undefined), obj);
+    } catch {
+        return undefined;
+    }
+};
+
+const firstDefined = (obj, paths) => {
+    for (const p of paths) {
+        const v = p.includes('.') ? getNested(obj, p) : (obj ? obj[p] : undefined);
+        if (v !== undefined && v !== null && v !== '') return v;
+    }
+    return undefined;
+};
 
 export default function NovoPublicador() {
     const { isAdmin } = useAuth();
     const { id } = useParams();
     const isEditMode = !!id;
     const navigate = useNavigate();
-
-    // -------------------------
-    // Helpers (compatibilidade)
-    // -------------------------
-    const getNested = (obj, path) => {
-        try {
-            return path.split('.').reduce((acc, k) => (acc ? acc[k] : undefined), obj);
-        } catch {
-            return undefined;
-        }
-    };
-
-    const firstDefined = (obj, paths) => {
-        for (const p of paths) {
-            const v = p.includes('.') ? getNested(obj, p) : (obj ? obj[p] : undefined);
-            if (v !== undefined && v !== null && v !== '') return v;
-        }
-        return undefined;
-    };
 
     // Proteção de Rota (Apenas Admin acessa)
     useEffect(() => {

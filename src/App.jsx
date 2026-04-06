@@ -1,46 +1,58 @@
-import React, { useState, useEffect, createContext, useContext } from 'react';
+import React, { useState, useEffect, createContext, useContext, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, CalendarCheck, FileText, Settings,
   RefreshCw, LogOut, Printer, MoreHorizontal, Download, Share, X
 } from 'lucide-react';
 import { Toaster, toast } from 'react-hot-toast';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { AuthProvider } from './contexts/AuthContext';
+import { useAuth } from './contexts/auth-context';
 
-// Importação das Páginas
-import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
-import NovoPublicador from './pages/Publicadores/NovoPublicador';
-import ListaPublicadores from './pages/Publicadores/ListaPublicadores';
-import DetalhesPublicador from './pages/Publicadores/DetalhesPublicador';
-import ControleAssistencia from './pages/Reunioes/ControleAssistencia';
-import VisaoGeralRelatorios from './pages/Relatorios/VisaoGeralRelatorios';
-import ImpressaoLote from './pages/Relatorios/ImpressaoLote';
-import Configuracoes from './pages/Configuracoes/Configuracoes';
+const Login = lazy(() => import('./pages/Login'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const NovoPublicador = lazy(() => import('./pages/Publicadores/NovoPublicador'));
+const ListaPublicadores = lazy(() => import('./pages/Publicadores/ListaPublicadores'));
+const DetalhesPublicador = lazy(() => import('./pages/Publicadores/DetalhesPublicador'));
+const ControleAssistencia = lazy(() => import('./pages/Reunioes/ControleAssistencia'));
+const VisaoGeralRelatorios = lazy(() => import('./pages/Relatorios/VisaoGeralRelatorios'));
+const ImpressaoLote = lazy(() => import('./pages/Relatorios/ImpressaoLote'));
+const Configuracoes = lazy(() => import('./pages/Configuracoes/Configuracoes'));
 
 // --- 1. PWA CONTEXT (MANTIDO) ---
 const PWAContext = createContext();
 
+const getIsIOS = () => /iPhone|iPad|iPod/.test(window.navigator.userAgent);
+const getIsStandalone = () => window.matchMedia('(display-mode: standalone)').matches ||
+  window.navigator.standalone === true;
+
 export const PWAProvider = ({ children }) => {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
-  const [isIOS, setIsIOS] = useState(false);
-  const [isStandalone, setIsStandalone] = useState(false);
+  const [isIOS] = useState(() => getIsIOS());
+  const [isStandalone, setIsStandalone] = useState(() => getIsStandalone());
 
   useEffect(() => {
-    setIsIOS(/iPhone|iPad|iPod/.test(navigator.userAgent));
-    const checkStandalone = () => {
-      const isApp = window.matchMedia('(display-mode: standalone)').matches ||
-        window.navigator.standalone === true;
-      setIsStandalone(isApp);
-    };
+    const mediaQuery = window.matchMedia('(display-mode: standalone)');
+    const checkStandalone = () => setIsStandalone(getIsStandalone());
+
     checkStandalone();
-    window.matchMedia('(display-mode: standalone)').addEventListener('change', checkStandalone);
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', checkStandalone);
+    } else if (typeof mediaQuery.addListener === 'function') {
+      mediaQuery.addListener(checkStandalone);
+    }
+
     const handleBeforeInstallPrompt = (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
     };
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     return () => {
+      if (typeof mediaQuery.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', checkStandalone);
+      } else if (typeof mediaQuery.removeListener === 'function') {
+        mediaQuery.removeListener(checkStandalone);
+      }
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     };
   }, []);
@@ -63,6 +75,15 @@ export const PWAProvider = ({ children }) => {
 };
 
 const usePWA = () => useContext(PWAContext);
+
+const RouteFallback = () => (
+  <div className="min-h-screen flex items-center justify-center bg-slate-100">
+    <div className="flex flex-col items-center gap-3 text-slate-500">
+      <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600"></div>
+      <span className="text-sm font-medium">Carregando tela...</span>
+    </div>
+  </div>
+);
 
 // --- 2. COMPONENTES DE ROTA ---
 
@@ -89,29 +110,29 @@ const AdminRoute = ({ children }) => {
   return children;
 };
 
-const NavLink = ({ to, icon: Icon, label, onClick }) => {
+const NavLink = ({ to, icon, label, onClick }) => {
   const location = useLocation();
   if (onClick) {
     return (
       <button onClick={onClick} className="flex items-center gap-3 p-3 w-full text-left rounded transition-colors duration-200 hover:bg-slate-700 text-slate-300 hover:text-white">
-        <Icon size={20} /> <span className="font-medium">{label}</span>
+        {React.createElement(icon, { size: 20 })} <span className="font-medium">{label}</span>
       </button>
     );
   }
   const isActive = location.pathname === to || (to !== '/' && location.pathname.startsWith(to + '/'));
   return (
     <Link to={to} className={`flex items-center gap-3 p-3 rounded transition-colors duration-200 ${isActive ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-slate-700 text-slate-300 hover:text-white'}`}>
-      <Icon size={20} /> <span className="font-medium">{label}</span>
+      {React.createElement(icon, { size: 20 })} <span className="font-medium">{label}</span>
     </Link>
   );
 };
 
-const MobileNavLink = ({ to, icon: Icon, label }) => {
+const MobileNavLink = ({ to, icon, label }) => {
   const location = useLocation();
   const isActive = location.pathname === to || (to !== '/' && location.pathname.startsWith(to + '/'));
   return (
     <Link to={to} className={`flex flex-col items-center text-[10px] gap-1 p-2 rounded transition-colors w-full ${isActive ? 'text-blue-400' : 'text-slate-400 hover:text-white'}`}>
-      <Icon size={22} /> <span className="font-medium">{label}</span>
+      {React.createElement(icon, { size: 22 })} <span className="font-medium">{label}</span>
     </Link>
   );
 };
@@ -135,7 +156,7 @@ const LayoutSistema = ({ children }) => {
   };
 
   const verificarAtualizacao = () => {
-    if (window.confirm("Recarregar sistema para verificar atualizações?")) window.location.reload(true);
+    if (window.confirm("Recarregar sistema para verificar atualizações?")) window.location.reload();
   };
 
   return (
@@ -277,25 +298,27 @@ export default function App() {
       <AuthProvider>
         <Toaster position="top-right" toastOptions={{ duration: 4000 }} />
         <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<Login />} />
+          <Suspense fallback={<RouteFallback />}>
+            <Routes>
+              <Route path="/login" element={<Login />} />
 
-            {/* ROTAS PÚBLICAS (Para quem tem login) */}
-            <Route path="/" element={<PrivateRoute><LayoutSistema><Dashboard /></LayoutSistema></PrivateRoute>} />
-            <Route path="/publicadores" element={<PrivateRoute><LayoutSistema><ListaPublicadores /></LayoutSistema></PrivateRoute>} />
-            <Route path="/publicadores/:id" element={<PrivateRoute><LayoutSistema><DetalhesPublicador /></LayoutSistema></PrivateRoute>} />
-            <Route path="/relatorios" element={<PrivateRoute><LayoutSistema><VisaoGeralRelatorios /></LayoutSistema></PrivateRoute>} />
+              {/* ROTAS PÚBLICAS (Para quem tem login) */}
+              <Route path="/" element={<PrivateRoute><LayoutSistema><Dashboard /></LayoutSistema></PrivateRoute>} />
+              <Route path="/publicadores" element={<PrivateRoute><LayoutSistema><ListaPublicadores /></LayoutSistema></PrivateRoute>} />
+              <Route path="/publicadores/:id" element={<PrivateRoute><LayoutSistema><DetalhesPublicador /></LayoutSistema></PrivateRoute>} />
+              <Route path="/relatorios" element={<PrivateRoute><LayoutSistema><VisaoGeralRelatorios /></LayoutSistema></PrivateRoute>} />
 
-            {/* ROTAS PROTEGIDAS (Apenas Admin) */}
-            <Route path="/publicadores/novo" element={<AdminRoute><LayoutSistema><NovoPublicador /></LayoutSistema></AdminRoute>} />
-            <Route path="/publicadores/editar/:id" element={<AdminRoute><LayoutSistema><NovoPublicador /></LayoutSistema></AdminRoute>} />
-            <Route path="/reunioes" element={<AdminRoute><LayoutSistema><ControleAssistencia /></LayoutSistema></AdminRoute>} />
-            <Route path="/configuracoes" element={<AdminRoute><LayoutSistema><Configuracoes /></LayoutSistema></AdminRoute>} />
-            <Route path="/impressao-lote" element={<AdminRoute><LayoutSistema><ImpressaoLote /></LayoutSistema></AdminRoute>} />
+              {/* ROTAS PROTEGIDAS (Apenas Admin) */}
+              <Route path="/publicadores/novo" element={<AdminRoute><LayoutSistema><NovoPublicador /></LayoutSistema></AdminRoute>} />
+              <Route path="/publicadores/editar/:id" element={<AdminRoute><LayoutSistema><NovoPublicador /></LayoutSistema></AdminRoute>} />
+              <Route path="/reunioes" element={<AdminRoute><LayoutSistema><ControleAssistencia /></LayoutSistema></AdminRoute>} />
+              <Route path="/configuracoes" element={<AdminRoute><LayoutSistema><Configuracoes /></LayoutSistema></AdminRoute>} />
+              <Route path="/impressao-lote" element={<AdminRoute><LayoutSistema><ImpressaoLote /></LayoutSistema></AdminRoute>} />
 
-            <Route path="*" element={<Navigate to="/" />} />
+              <Route path="*" element={<Navigate to="/" />} />
 
-          </Routes>
+            </Routes>
+          </Suspense>
         </BrowserRouter>
       </AuthProvider>
     </PWAProvider>

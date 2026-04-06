@@ -16,23 +16,28 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
     useEffect(() => {
         const carregarAssistencia = async () => {
             try {
-                // 1. Pega do mês atual
-                if (mesReferencia) {
-                    const docRef = doc(db, "estatisticas_assistencia", mesReferencia);
-                    const docSnap = await getDoc(docRef);
-                    if (docSnap.exists()) {
-                        setAssistenciaAtual(docSnap.data().media_fim || 0);
-                    } else {
-                        setAssistenciaAtual(0);
-                    }
+                const mesesNecessarios = Array.from(new Set([
+                    mesReferencia,
+                    ...historicoS1.map(item => item.mes).filter(Boolean)
+                ].filter(Boolean)));
+
+                if (mesesNecessarios.length === 0) {
+                    setAssistenciaAtual(0);
+                    setAssistenciaHist({});
+                    return;
                 }
 
-                // 2. Pega todas as assistências para mapear no histórico
-                const snapAssistencia = await getDocs(collection(db, "estatisticas_assistencia"));
+                const snapshots = await Promise.all(
+                    mesesNecessarios.map((mes) => getDoc(doc(db, "estatisticas_assistencia", mes)))
+                );
+
                 const mapaAssistencia = {};
-                snapAssistencia.forEach(d => {
-                    mapaAssistencia[d.id] = d.data().media_fim || 0;
+                snapshots.forEach((docSnap, index) => {
+                    const mes = mesesNecessarios[index];
+                    mapaAssistencia[mes] = docSnap.exists() ? (docSnap.data().media_fim || 0) : 0;
                 });
+
+                setAssistenciaAtual(mapaAssistencia[mesReferencia] || 0);
                 setAssistenciaHist(mapaAssistencia);
 
             } catch (error) {
@@ -41,7 +46,7 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
         };
 
         carregarAssistencia();
-    }, [mesReferencia]);
+    }, [historicoS1, mesReferencia]);
 
     // Lista quem precisa entregar o relatório (Ativo ou Irregular)
     const pendentesAtivos = useMemo(() => {
@@ -140,7 +145,7 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
                 const checkParticipou = (val) => val === true || String(val).toLowerCase() === "true";
                 const participou = checkParticipou(d.participou) || checkParticipou(d.atividade?.participou);
 
-                const horas = Number(d.atividade?.horas || d.horas || 0);
+                const horas = Number(d.atividade?.horas || d.horas || 0) + Number(d.atividade?.bonus_horas || d.atividade?.bonushoras || d.bonus_horas || d.bonushoras || 0);
                 const estudos = Number(d.atividade?.estudos || d.estudos || 0);
 
                 if (!participou && horas === 0 && estudos === 0) return;
@@ -196,7 +201,7 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
         <button onClick={(e) => { e.stopPropagation(); onClick(); }} className="text-gray-400 hover:text-blue-600 transition p-1 rounded-full hover:bg-blue-50 ml-1"><HelpCircle size={14} /></button>
     );
 
-    const StatCardS1 = ({ titulo, dados, cor, icone: Icon, infoKey }) => {
+    const StatCardS1 = ({ titulo, dados, cor, icone, infoKey }) => {
         const abrirInfo = () => {
             const mensagens = {
                 pubs: "Publicadores batizados e não batizados. Inclui horas de crédito (idosos/enfermos).",
@@ -208,7 +213,7 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
         return (
             <div className={`rounded-xl shadow-sm border overflow-hidden ${cor === 'blue' ? 'border-blue-100' : cor === 'orange' ? 'border-orange-100' : 'border-yellow-100'}`}>
                 <div className={`p-3 border-b flex justify-between items-center ${cor === 'blue' ? 'bg-blue-50 border-blue-100 text-blue-800' : cor === 'orange' ? 'bg-orange-50 border-orange-100 text-orange-800' : 'bg-yellow-50 border-yellow-100 text-yellow-800'}`}>
-                    <h3 className="font-bold text-sm flex items-center gap-2"><Icon size={16} /> {titulo} <InfoBtn onClick={abrirInfo} /></h3>
+                    <h3 className="font-bold text-sm flex items-center gap-2">{React.createElement(icone, { size: 16 })} {titulo} <InfoBtn onClick={abrirInfo} /></h3>
                 </div>
                 <div className="p-3 bg-white space-y-2 text-sm">
                     <div className="flex justify-between"><span className="text-gray-500">Relataram</span><span className="font-bold text-lg">{dados?.relatorios || 0}</span></div>
