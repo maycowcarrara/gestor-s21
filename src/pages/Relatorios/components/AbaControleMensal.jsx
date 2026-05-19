@@ -2,6 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Filter, XCircle, CheckCircle, Activity, Minus, ArrowUpDown, User, Award, Star } from 'lucide-react';
+import { getPioneiroTipoClassName } from '../../../utils/pioneiroStyles';
 
 const SortIcon = ({ campo, ordenacao }) => (
     ordenacao.campo !== campo
@@ -128,7 +129,10 @@ export default function AbaControleMensal({ dados }) {
                                         <div className={`font-medium ${pub.situacao !== 'Ativo' ? 'text-gray-400 line-through' : 'text-gray-800'} ${pub.isOrfao ? 'text-red-700 font-bold' : ''}`}>
                                             {pub.isOrfao ? pub.nome : <Link to={`/publicadores/${pub.id}`} className="hover:text-blue-600 hover:underline">{pub.nome}</Link>}
                                         </div>
-                                        <div className="text-[10px] text-gray-400 font-bold uppercase">{pub.grupo} • {pub.tipo}</div>
+                                        <div className="text-[10px] font-bold uppercase">
+                                            <span className="text-gray-400">{pub.grupo} • </span>
+                                            <span className={getPioneiroTipoClassName(pub.tipo)}>{pub.tipo}</span>
+                                        </div>
                                     </td>
                                     <td className="px-6 py-3 text-center">
                                         {pub.entregue ? (pub.pregou ? <CheckCircle size={18} className="text-green-500 mx-auto" /> : <XCircle size={18} className="text-orange-400 mx-auto" />) : <Minus size={18} className="text-gray-200 mx-auto" />}

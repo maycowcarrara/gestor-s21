@@ -1,5 +1,14 @@
 import Papa from 'papaparse';
 
+const parsePregou = (value) => {
+    const normalized = String(value || '').trim().toLowerCase();
+
+    if (['sim', 's', 'yes', 'true', '1'].includes(normalized)) return true;
+    if (['nao', 'não', 'n', 'no', 'false', '0'].includes(normalized)) return false;
+
+    return null;
+};
+
 export const buscarRelatoriosCSV = async (url) => {
     try {
         const response = await fetch(url);
@@ -40,6 +49,7 @@ export const buscarRelatoriosCSV = async (url) => {
                         return {
                             // Padronizado para bater com as variáveis lidas no AbaImportacao.jsx
                             nome: obj['Nome'],
+                            pregou: parsePregou(obj['Pregou']),
                             tipo: obj['Tipo'],
                             horas: obj['Horas'],
                             estudos: obj['Estudos'],
