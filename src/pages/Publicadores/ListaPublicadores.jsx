@@ -107,7 +107,6 @@ export default function ListaPublicadores() {
     const buscaDiferida = useDeferredValue(busca);
     const [listaGrupos, setListaGrupos] = useState([]);
 
-    // ALTERAÇÃO: Inicia fechado se for celular (largura < 768px), aberto se for desktop
     const [mostrarFiltros, setMostrarFiltros] = useState(() => {
         if (typeof window !== 'undefined') {
             return window.innerWidth >= 768;
@@ -316,6 +315,17 @@ export default function ListaPublicadores() {
         filtroBatismo !== "todos" ||
         busca !== "";
 
+    const filtrosAvancadosAtivosCount = [
+        filtroTipo !== "todos",
+        filtroPrivilegio !== "todos",
+        filtroFaixa !== "todos",
+        filtroGrupo !== "todos",
+        filtroGenero !== "todos",
+        filtroBatismo !== "todos"
+    ].filter(Boolean).length;
+
+    const temFiltroAvancadoAtivo = filtrosAvancadosAtivosCount > 0;
+
     const getGroupColor = (name) => {
         const colors = [
             'bg-blue-50 border-blue-100 text-blue-800',
@@ -508,9 +518,14 @@ export default function ListaPublicadores() {
                         onClick={() => setMostrarFiltros(!mostrarFiltros)}
                         className={`bg-white border px-3 py-2 rounded-lg flex items-center gap-2 font-medium text-sm transition-colors ${mostrarFiltros ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
                             }`}
-                        title={mostrarFiltros ? "Ocultar Filtros" : "Mostrar Filtros"}
+                        title={mostrarFiltros ? "Ocultar filtros extras" : "Mostrar filtros extras"}
                     >
-                        <Filter size={16} /> Filtros {temFiltroAtivo && !mostrarFiltros && <span className="w-2 h-2 rounded-full bg-red-500"></span>}
+                        <Filter size={16} /> Filtros
+                        {temFiltroAvancadoAtivo && (
+                            <span className="min-w-5 h-5 px-1 rounded-full bg-blue-600 text-white text-[10px] font-bold flex items-center justify-center">
+                                {filtrosAvancadosAtivosCount}
+                            </span>
+                        )}
                     </button>
 
                     {isAdmin && (
@@ -524,15 +539,14 @@ export default function ListaPublicadores() {
                 </div>
             </div>
 
-            {/* PAINEL DE CONTROLE (BUSCA + FILTROS) */}
-            <div className={`bg-gray-50 p-4 rounded-xl mb-6 border border-gray-200 shadow-sm transition-all duration-300 ${mostrarFiltros ? 'block' : 'hidden'}`}>
-                {/* LINHA 1 */}
-                <div className="flex flex-col md:flex-row gap-4 mb-4">
+            {/* PAINEL DE CONTROLE */}
+            <div className="bg-gray-50 p-3 md:p-4 rounded-xl mb-6 border border-gray-200 shadow-sm">
+                <div className="flex flex-col gap-3 md:gap-4">
                     <div className="relative flex-1">
                         <Search className="absolute left-3 top-3 text-gray-400 w-5 h-5" />
                         <input
                             type="text"
-                            placeholder="Buscar nome..."
+                            placeholder="Buscar nome, grupo, perfil..."
                             value={busca}
                             onChange={(e) => setBusca(e.target.value)}
                             onKeyDown={(e) => {
@@ -555,7 +569,7 @@ export default function ListaPublicadores() {
                         )}
                     </div>
 
-                    <div className="bg-white p-1 rounded-lg border border-gray-200 flex shrink-0 overflow-x-auto items-center">
+                    <div className="bg-white p-1 rounded-lg border border-gray-200 flex overflow-x-auto items-center">
                         <button
                             onClick={() => setFiltroSituacao('Geral')}
                             className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1 ${filtroSituacao === 'Geral' ? 'bg-gray-800 text-white shadow-sm ring-1 ring-gray-900' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
@@ -565,7 +579,6 @@ export default function ListaPublicadores() {
 
                         <div className="w-px h-4 bg-gray-200 mx-1"></div>
 
-                        {/* 🚀 ARRAY ATUALIZADO COM 'Irregular' */}
                         {['Ativo', 'Irregular', 'Inativo', 'Removido'].map((sit) => {
                             let activeClass = "";
                             if (sit === 'Ativo') activeClass = 'bg-green-100 text-green-700 shadow-sm ring-1 ring-green-200';
@@ -592,124 +605,150 @@ export default function ListaPublicadores() {
                             <EyeOff size={10} /> Excluídos
                         </button>
                     </div>
-                </div>
 
-                <div className="border-t border-gray-200 mb-4"></div>
-
-                {/* LINHA 2: TEOCRÁTICO */}
-                <div className="flex flex-col gap-3">
-                    <div className="flex flex-wrap gap-2 items-center">
-                        <span className="text-[10px] font-bold text-gray-400 uppercase mr-1 w-16">Teocrático:</span>
-
-                        <select
-                            value={filtroGrupo}
-                            onChange={(e) => setFiltroGrupo(e.target.value)}
-                            className={`text-xs font-bold py-1.5 px-3 rounded-lg border cursor-pointer outline-none transition ${filtroGrupo !== 'todos' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-100'}`}
+                    <div className="border-t border-gray-200 pt-1 md:pt-3">
+                        <button
+                            type="button"
+                            onClick={() => setMostrarFiltros((prev) => !prev)}
+                            aria-expanded={mostrarFiltros}
+                            className="w-full flex items-center justify-between gap-2 md:gap-3 text-left rounded-lg hover:bg-white/70 transition px-0.5 md:px-1 py-1 md:py-2"
                         >
-                            <option value="todos">Todos os Grupos</option>
-                            {listaGrupos.map((g, index) => {
-                                const nomeGrupo = typeof g === 'object' ? g.nome : g;
-                                return <option key={index} value={nomeGrupo}>{nomeGrupo}</option>;
-                            })}
-                        </select>
+                            <span className="text-xs md:text-sm font-semibold text-gray-700">Filtros extras</span>
 
-                        <div className="w-px h-5 bg-gray-300 mx-1"></div>
+                            <div className="flex items-center gap-2 shrink-0">
+                                {temFiltroAvancadoAtivo && (
+                                    <span className="text-[10px] md:text-[11px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-1 rounded-full">
+                                        {filtrosAvancadosAtivosCount}
+                                    </span>
+                                )}
+                                <span className="w-7 h-7 md:w-8 md:h-8 rounded-full border border-gray-200 bg-white text-gray-500 flex items-center justify-center">
+                                    {mostrarFiltros ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                </span>
+                            </div>
+                        </button>
 
-                        <TagFilter
-                            label="Pioneiro Regular"
-                            icon={Briefcase}
-                            active={filtroTipo === 'pioneiro_regular'}
-                            onClick={() => setFiltroTipo(filtroTipo === 'pioneiro_regular' ? 'todos' : 'pioneiro_regular')}
-                            color="blue"
-                        />
-                        <TagFilter
-                            label="Ancião"
-                            icon={Shield}
-                            active={filtroPrivilegio === 'anciao'}
-                            onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'anciao' ? 'todos' : 'anciao')}
-                            color="indigo"
-                        />
-                        <TagFilter
-                            label="Servo Min."
-                            icon={Shield}
-                            active={filtroPrivilegio === 'servo'}
-                            onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'servo' ? 'todos' : 'servo')}
-                            color="indigo"
-                        />
-                        <TagFilter
-                            label="Varão Hab."
-                            icon={CheckCircle}
-                            active={filtroPrivilegio === 'varao'}
-                            onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'varao' ? 'todos' : 'varao')}
-                            color="green"
-                        />
-                    </div>
+                        <div className={`grid transition-all duration-300 ease-out ${mostrarFiltros ? 'grid-rows-[1fr] opacity-100 mt-2 md:mt-3' : 'grid-rows-[0fr] opacity-0 mt-0'}`}>
+                            <div className="overflow-hidden">
+                                <div className="pt-0.5 md:pt-1">
+                                    {temFiltroAtivo && (
+                                        <div className="flex justify-end mb-2 md:mb-3">
+                                            <button onClick={limparFiltros} className="flex items-center gap-1 text-xs font-bold text-red-600 hover:text-red-800 hover:underline px-1">
+                                                <X size={14} /> Limpar
+                                            </button>
+                                        </div>
+                                    )}
 
-                    {/* LINHA 3: PERFIL */}
-                    <div className="flex flex-wrap gap-2 items-center border-t border-gray-100 pt-2 md:pt-0 md:border-0">
-                        <span className="text-[10px] font-bold text-gray-400 uppercase mr-1 w-16">Perfil:</span>
+                            <div className="flex flex-col gap-3">
+                                <div className="flex flex-wrap gap-2 items-center">
+                                    <span className="text-[10px] font-bold text-gray-400 uppercase mr-1 w-16">Teocrático:</span>
 
-                        <TagFilter
-                            label="Homem"
-                            icon={User}
-                            active={filtroGenero === 'Masculino'}
-                            onClick={() => setFiltroGenero(filtroGenero === 'Masculino' ? 'todos' : 'Masculino')}
-                            color="cyan"
-                        />
-                        <TagFilter
-                            label="Mulher"
-                            icon={User}
-                            active={filtroGenero === 'Feminino'}
-                            onClick={() => setFiltroGenero(filtroGenero === 'Feminino' ? 'todos' : 'Feminino')}
-                            color="pink"
-                        />
+                                    <select
+                                        value={filtroGrupo}
+                                        onChange={(e) => setFiltroGrupo(e.target.value)}
+                                        className={`text-xs font-bold py-1.5 px-3 rounded-lg border cursor-pointer outline-none transition ${filtroGrupo !== 'todos' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-100'}`}
+                                    >
+                                        <option value="todos">Todos os Grupos</option>
+                                        {listaGrupos.map((g, index) => {
+                                            const nomeGrupo = typeof g === 'object' ? g.nome : g;
+                                            return <option key={index} value={nomeGrupo}>{nomeGrupo}</option>;
+                                        })}
+                                    </select>
 
-                        <div className="w-px h-5 bg-gray-300 mx-1"></div>
+                                    <div className="w-px h-5 bg-gray-300 mx-1 hidden sm:block"></div>
 
-                        <TagFilter
-                            label="Não Batizado"
-                            icon={Droplets}
-                            active={filtroBatismo === 'nao_batizado'}
-                            onClick={() => setFiltroBatismo(filtroBatismo === 'nao_batizado' ? 'todos' : 'nao_batizado')}
-                            color="cyan"
-                        />
+                                    <TagFilter
+                                        label="Pioneiro Regular"
+                                        icon={Briefcase}
+                                        active={filtroTipo === 'pioneiro_regular'}
+                                        onClick={() => setFiltroTipo(filtroTipo === 'pioneiro_regular' ? 'todos' : 'pioneiro_regular')}
+                                        color="blue"
+                                    />
+                                    <TagFilter
+                                        label="Ancião"
+                                        icon={Shield}
+                                        active={filtroPrivilegio === 'anciao'}
+                                        onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'anciao' ? 'todos' : 'anciao')}
+                                        color="indigo"
+                                    />
+                                    <TagFilter
+                                        label="Servo Min."
+                                        icon={Shield}
+                                        active={filtroPrivilegio === 'servo'}
+                                        onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'servo' ? 'todos' : 'servo')}
+                                        color="indigo"
+                                    />
+                                    <TagFilter
+                                        label="Varão Hab."
+                                        icon={CheckCircle}
+                                        active={filtroPrivilegio === 'varao'}
+                                        onClick={() => setFiltroPrivilegio(filtroPrivilegio === 'varao' ? 'todos' : 'varao')}
+                                        color="green"
+                                    />
+                                </div>
 
-                        <div className="w-px h-5 bg-gray-300 mx-1"></div>
+                                <div className="flex flex-wrap gap-2 items-center border-t border-gray-100 pt-2 md:pt-0 md:border-0">
+                                    <span className="text-[10px] font-bold text-gray-400 uppercase mr-1 w-16">Perfil:</span>
 
-                        <TagFilter
-                            label="Criança"
-                            icon={Baby}
-                            active={filtroFaixa === 'crianca'}
-                            onClick={() => setFiltroFaixa(filtroFaixa === 'crianca' ? 'todos' : 'crianca')}
-                            color="pink"
-                        />
-                        <TagFilter
-                            label="Jovem"
-                            icon={UserCheck}
-                            active={filtroFaixa === 'jovem'}
-                            onClick={() => setFiltroFaixa(filtroFaixa === 'jovem' ? 'todos' : 'jovem')}
-                            color="purple"
-                        />
-                        <TagFilter
-                            label="Adulto"
-                            icon={User}
-                            active={filtroFaixa === 'adulto'}
-                            onClick={() => setFiltroFaixa(filtroFaixa === 'adulto' ? 'todos' : 'adulto')}
-                            color="blue"
-                        />
-                        <TagFilter
-                            label="Idoso"
-                            icon={Glasses}
-                            active={filtroFaixa === 'idoso'}
-                            onClick={() => setFiltroFaixa(filtroFaixa === 'idoso' ? 'todos' : 'idoso')}
-                            color="orange"
-                        />
+                                    <TagFilter
+                                        label="Homem"
+                                        icon={User}
+                                        active={filtroGenero === 'Masculino'}
+                                        onClick={() => setFiltroGenero(filtroGenero === 'Masculino' ? 'todos' : 'Masculino')}
+                                        color="cyan"
+                                    />
+                                    <TagFilter
+                                        label="Mulher"
+                                        icon={User}
+                                        active={filtroGenero === 'Feminino'}
+                                        onClick={() => setFiltroGenero(filtroGenero === 'Feminino' ? 'todos' : 'Feminino')}
+                                        color="pink"
+                                    />
 
-                        {temFiltroAtivo && (
-                            <button onClick={limparFiltros} className="ml-auto flex items-center gap-1 text-xs font-bold text-red-600 hover:text-red-800 hover:underline px-2">
-                                <X size={14} /> Limpar
-                            </button>
-                        )}
+                                    <div className="w-px h-5 bg-gray-300 mx-1 hidden sm:block"></div>
+
+                                    <TagFilter
+                                        label="Não Batizado"
+                                        icon={Droplets}
+                                        active={filtroBatismo === 'nao_batizado'}
+                                        onClick={() => setFiltroBatismo(filtroBatismo === 'nao_batizado' ? 'todos' : 'nao_batizado')}
+                                        color="cyan"
+                                    />
+
+                                    <div className="w-px h-5 bg-gray-300 mx-1 hidden sm:block"></div>
+
+                                    <TagFilter
+                                        label="Criança"
+                                        icon={Baby}
+                                        active={filtroFaixa === 'crianca'}
+                                        onClick={() => setFiltroFaixa(filtroFaixa === 'crianca' ? 'todos' : 'crianca')}
+                                        color="pink"
+                                    />
+                                    <TagFilter
+                                        label="Jovem"
+                                        icon={UserCheck}
+                                        active={filtroFaixa === 'jovem'}
+                                        onClick={() => setFiltroFaixa(filtroFaixa === 'jovem' ? 'todos' : 'jovem')}
+                                        color="purple"
+                                    />
+                                    <TagFilter
+                                        label="Adulto"
+                                        icon={User}
+                                        active={filtroFaixa === 'adulto'}
+                                        onClick={() => setFiltroFaixa(filtroFaixa === 'adulto' ? 'todos' : 'adulto')}
+                                        color="blue"
+                                    />
+                                    <TagFilter
+                                        label="Idoso"
+                                        icon={Glasses}
+                                        active={filtroFaixa === 'idoso'}
+                                        onClick={() => setFiltroFaixa(filtroFaixa === 'idoso' ? 'todos' : 'idoso')}
+                                        color="orange"
+                                    />
+                                </div>
+                            </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

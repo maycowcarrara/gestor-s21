@@ -1,7 +1,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { db } from '../config/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { buscarResumosAssistenciaBrutaMeses } from './assistenciaResumo';
 
 /**
  * Gera o PDF do S-88 (Registro de Assistência)
@@ -43,48 +42,33 @@ export const gerarPDF_S88 = async (anoServico, nomeCongregacao) => {
         { nome: 'Agosto', mes: '08', ano: anoServico },
     ];
 
+    const mesesIso = meses.map((m) => `${m.ano}-${m.mes}`);
+    const resumosPorMes = await buscarResumosAssistenciaBrutaMeses(mesesIso);
     const linhasTabela = [];
     let mediaAnualMeioSoma = 0;
     let mediaAnualFimSoma = 0;
     let mesesContadosMeio = 0;
     let mesesContadosFim = 0;
 
-    // Busca os dados mês a mês
     for (const m of meses) {
         const idDoc = `${m.ano}-${m.mes}`;
-        const ref = doc(db, 'estatisticas_assistencia', idDoc);
-
-        let dados = {
-            qtd_meio: '', total_meio: '', media_meio: '',
-            qtd_fim: '', total_fim: '', media_fim: ''
+        const d = resumosPorMes.get(idDoc) || {};
+        const dados = {
+            qtd_meio: d.qtd_reunioes_meio || 0,
+            total_meio: d.total_assistencia_meio || '-',
+            media_meio: d.media_meio || 0,
+            qtd_fim: d.qtd_reunioes_fim || 0,
+            total_fim: d.total_assistencia_fim || '-',
+            media_fim: d.media_fim || 0
         };
 
-        try {
-            const snap = await getDoc(ref);
-            if (snap.exists()) {
-                const d = snap.data();
-
-                // Mapeia os dados do banco para a tabela
-                dados.qtd_meio = d.qtd_reunioes_meio || 0;
-                dados.total_meio = d.total_assistencia_meio || '-'; // <--- CAMPO NOVO
-                dados.media_meio = d.media_meio || 0;
-
-                dados.qtd_fim = d.qtd_reunioes_fim || 0;
-                dados.total_fim = d.total_assistencia_fim || '-';   // <--- CAMPO NOVO
-                dados.media_fim = d.media_fim || 0;
-
-                // Cálculos para a linha final de média anual
-                if (d.media_meio > 0) {
-                    mediaAnualMeioSoma += d.media_meio;
-                    mesesContadosMeio++;
-                }
-                if (d.media_fim > 0) {
-                    mediaAnualFimSoma += d.media_fim;
-                    mesesContadosFim++;
-                }
-            }
-        } catch (error) {
-            console.error(`Erro ao buscar dados de ${idDoc}`, error);
+        if (dados.media_meio > 0) {
+            mediaAnualMeioSoma += dados.media_meio;
+            mesesContadosMeio++;
+        }
+        if (dados.media_fim > 0) {
+            mediaAnualFimSoma += dados.media_fim;
+            mesesContadosFim++;
         }
 
         linhasTabela.push([
@@ -116,6 +100,8 @@ export const gerarPDF_S88 = async (anoServico, nomeCongregacao) => {
     // --- 4. GERAÇÃO DA TABELA (AutoTable) ---
     autoTable(docPdf, {
         startY: 30,
+        margin: { left: 14, right: 14 },
+        tableWidth: 261,
         head: [
             [
                 { content: '', colSpan: 1, styles: { fillColor: [255, 255, 255] } }, // Espaço para o nome do mês
@@ -124,36 +110,38 @@ export const gerarPDF_S88 = async (anoServico, nomeCongregacao) => {
             ],
             [
                 'Mês',
-                'Qtde Reuniões', 'Assist. Total', 'Média',
-                'Qtde Reuniões', 'Assist. Total', 'Média'
+                'Qtd.', 'Total', 'Média',
+                'Qtd.', 'Total', 'Média'
             ]
         ],
         body: linhasTabela,
         theme: 'grid',
         styles: {
-            fontSize: 9,
+            fontSize: 8,
             cellPadding: 2, // Reduzi um pouco o padding interno
             valign: 'middle',
             halign: 'center',
+            overflow: 'linebreak',
             lineWidth: 0.1,
             lineColor: [200, 200, 200]
         },
         columnStyles: {
-            0: { halign: 'left', fontStyle: 'bold', cellWidth: 45 }, // Aumentei um pouco pro nome do mês caber folgado
-            1: { cellWidth: 22 }, // Reduzi de 30 para 22 (Qtd Meio)
-            2: { cellWidth: 25 }, // Reduzi de 30 para 25 (Total Meio)
-            3: { cellWidth: 25, fontStyle: 'bold' }, // Média Meio
+            0: { halign: 'left', fontStyle: 'bold', cellWidth: 45 },
+            1: { cellWidth: 36 },
+            2: { cellWidth: 36 },
+            3: { cellWidth: 36, fontStyle: 'bold' },
 
             // Espaçador visual natural
 
-            4: { cellWidth: 22 }, // Reduzi de 30 para 22 (Qtd Fim)
-            5: { cellWidth: 25 }, // Reduzi de 30 para 25 (Total Fim)
-            6: { cellWidth: 25, fontStyle: 'bold' }  // Média Fim
+            4: { cellWidth: 36 },
+            5: { cellWidth: 36 },
+            6: { cellWidth: 36, fontStyle: 'bold' }
         },
         headStyles: {
             fillColor: [240, 240, 240],
             textColor: [50, 50, 50],
             fontStyle: 'bold',
+            fontSize: 8,
             lineWidth: 0.1
         },
     });
@@ -171,4 +159,6 @@ export const gerarPDF_S88 = async (anoServico, nomeCongregacao) => {
     // Salva o arquivo
     const nomeArquivo = `S-88_${anoServico - 1}-${anoServico}.pdf`;
     docPdf.save(nomeArquivo);
+
+    return { nomeArquivo };
 };

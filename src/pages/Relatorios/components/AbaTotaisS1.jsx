@@ -2,7 +2,8 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { Calendar, Users, Calculator, RefreshCw, History, FileText, Info, X, HelpCircle, AlertTriangle, Copy } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { db } from '../../../config/firebase';
-import { collection, getDocs, writeBatch, query, serverTimestamp, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, writeBatch, query, serverTimestamp, doc } from 'firebase/firestore';
+import { buscarResumosAssistenciaBrutaMeses } from '../../../utils/assistenciaResumo';
 
 export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadingHistorico, isAdmin, onRecalculate, dados }) {
     const [recalculando, setRecalculando] = useState(false);
@@ -27,14 +28,10 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
                     return;
                 }
 
-                const snapshots = await Promise.all(
-                    mesesNecessarios.map((mes) => getDoc(doc(db, "estatisticas_assistencia", mes)))
-                );
-
                 const mapaAssistencia = {};
-                snapshots.forEach((docSnap, index) => {
-                    const mes = mesesNecessarios[index];
-                    mapaAssistencia[mes] = docSnap.exists() ? (docSnap.data().media_fim || 0) : 0;
+                const resumosPorMes = await buscarResumosAssistenciaBrutaMeses(mesesNecessarios);
+                mesesNecessarios.forEach((mes) => {
+                    mapaAssistencia[mes] = resumosPorMes.get(mes)?.media_fim || 0;
                 });
 
                 setAssistenciaAtual(mapaAssistencia[mesReferencia] || 0);

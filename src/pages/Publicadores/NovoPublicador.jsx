@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { db } from '../../config/firebase';
-import { collection, addDoc, updateDoc, Timestamp, doc, getDoc } from 'firebase/firestore';
+import { collection, writeBatch, Timestamp, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import {
     Save, User, MapPin, Phone, Briefcase, Mail, Languages, Droplets, Calendar,
@@ -9,9 +9,16 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../contexts/auth-context';
+import ImportadorPdfS21 from '../../components/Publicadores/ImportadorPdfS21';
 
 // utils (conforme combinado)
 import { normalizarSituacao } from '../../utils/normalizadores';
+import { clearPublicadoresCache } from '../../utils/publicadoresCache';
+import {
+    recalcularEstatisticasS1MesesClient,
+    sincronizarUltimoRelatorioPublicadoresClient
+} from '../../utils/relatoriosDerivados';
+import { sincronizarSituacaoPublicadoresClient } from '../../utils/sincronizadorPublicadores';
 
 const getNested = (obj, path) => {
     try {
@@ -28,6 +35,172 @@ const firstDefined = (obj, paths) => {
     }
     return undefined;
 };
+
+const buildRelatorioId = (mesRef, idPub) => `${mesRef}_${idPub}`;
+
+const normalizeReportForComparison = (report) => ({
+    participou: report?.participou === true,
+    tipo_servico_mes: String(report?.tipo_servico_mes || 'Publicador').trim(),
+    horas: Number(report?.horas || 0),
+    bonus_horas: Number(report?.bonus_horas || 0),
+    estudos: Number(report?.estudos || 0),
+    observacoes: String(report?.observacoes || '').trim()
+});
+
+const shouldApplyImportedBonus = (report) => (
+    report?.bonus_horas_editado === true
+    || report?.bonus_horas_extraido === true
+    || Number(report?.bonus_horas || 0) > 0
+);
+
+const buildReportDiffLabels = (currentReport, nextReport) => {
+    const before = normalizeReportForComparison(currentReport);
+    const after = normalizeReportForComparison(nextReport);
+    const labels = [];
+
+    if (before.participou !== after.participou) labels.push(`participou: ${before.participou ? 'sim' : 'não'} -> ${after.participou ? 'sim' : 'não'}`);
+    if (before.tipo_servico_mes !== after.tipo_servico_mes) labels.push(`tipo: ${before.tipo_servico_mes} -> ${after.tipo_servico_mes}`);
+    if (before.horas !== after.horas) labels.push(`horas: ${before.horas} -> ${after.horas}`);
+    if (before.bonus_horas !== after.bonus_horas) labels.push(`bônus: ${before.bonus_horas} -> ${after.bonus_horas}`);
+    if (before.estudos !== after.estudos) labels.push(`estudos: ${before.estudos} -> ${after.estudos}`);
+    if (before.observacoes !== after.observacoes) labels.push(`obs.: ${before.observacoes || '-'} -> ${after.observacoes || '-'}`);
+
+    return labels;
+};
+
+const buildRelatorioImpactSummary = (relatorios, existingReports = {}) => {
+    const novos = [];
+    const alterados = [];
+    const iguais = [];
+
+    relatorios.forEach((report) => {
+        const mesRef = String(report?.mes_referencia || '').trim();
+        if (!mesRef) return;
+
+        const atual = existingReports?.[mesRef];
+        if (!atual) {
+            novos.push(report);
+            return;
+        }
+
+        const reportComparable = {
+            ...report,
+            bonus_horas: shouldApplyImportedBonus(report)
+                ? Number(report.bonus_horas || 0)
+                : Number(atual.bonus_horas || 0)
+        };
+        const diffs = buildReportDiffLabels(atual, reportComparable);
+        if (diffs.length === 0) {
+            iguais.push({ mes_referencia: mesRef });
+            return;
+        }
+
+        alterados.push({
+            mes_referencia: mesRef,
+            diffs
+        });
+    });
+
+    return { novos, alterados, iguais };
+};
+
+const isSameReportPayload = (existingReport, nextReport) => buildReportDiffLabels(existingReport, nextReport).length === 0;
+
+const buildRelatorioPayload = (publicadorId, report, nomeSnapshot, existingReport = null) => {
+    const mesRef = String(report.mes_referencia || '').trim();
+    const [anoStr, mesStr] = mesRef.split('-');
+    const anoCalendario = parseInt(anoStr, 10);
+    const mesNumero = parseInt(mesStr, 10);
+    const anoServico = Number(report.ano_servico) || (mesNumero >= 9 ? anoCalendario + 1 : anoCalendario);
+    const tipoNoMes = report.tipo_servico_mes || 'Publicador';
+    const isAuxiliar = tipoNoMes === 'Pioneiro Auxiliar' || report.pioneiro_auxiliar_mes === true;
+    const bonusHoras = shouldApplyImportedBonus(report)
+        ? Number(report.bonus_horas || 0)
+        : Number(existingReport?.bonus_horas || 0);
+    const createdAt = existingReport?.datacriacao || existingReport?.data_criacao || Timestamp.now();
+
+    return {
+        idpublicador: publicadorId,
+        mesreferencia: mesRef,
+        anoservico: anoServico,
+        datacriacao: createdAt,
+        dataatualizacao: Timestamp.now(),
+        atualizadoem: Timestamp.now(),
+        nome_publicador: nomeSnapshot,
+
+        id_publicador: publicadorId,
+        mes_referencia: mesRef,
+        ano_servico: anoServico,
+        data_criacao: createdAt,
+        data_atualizacao: Timestamp.now(),
+        atividade: {
+            participou: report.participou === true,
+            horas: Number(report.horas || 0),
+            bonushoras: bonusHoras,
+            bonus_horas: bonusHoras,
+            estudos: Number(report.estudos || 0),
+            observacoes: report.observacoes || '',
+            tipopioneiromes: tipoNoMes,
+            tipo_pioneiro_mes: tipoNoMes,
+            pioneiroauxiliarmes: isAuxiliar,
+            pioneiro_auxiliar_mes: isAuxiliar,
+            nome_snapshot: nomeSnapshot
+        },
+        atualizado_em: Timestamp.now(),
+        origem: 'importacao_pdf_s21'
+    };
+};
+
+const isBlankValue = (value) => value === undefined || value === null || String(value).trim() === '';
+
+const isEffectivelyBlank = (currentValue, originalValue, defaultValue) => {
+    if (isBlankValue(currentValue)) return true;
+    if (defaultValue !== undefined && isBlankValue(originalValue) && currentValue === defaultValue) return true;
+    return false;
+};
+
+const mergeImportedField = (currentValue, importedValue, shouldOnlyFillBlank, originalValue, defaultValue) => {
+    if (!shouldOnlyFillBlank) return importedValue ?? currentValue;
+    if (isEffectivelyBlank(currentValue, originalValue, defaultValue)) return importedValue ?? currentValue;
+    return currentValue;
+};
+
+const normalizeExistingReport = (rawReport, docId) => {
+    const atividade = rawReport?.atividade || {};
+    return {
+        __docId: docId,
+        mes_referencia: String(firstDefined(rawReport, ['mes_referencia', 'mesreferencia']) || '').trim(),
+        participou: atividade.participou === true,
+        tipo_servico_mes: firstDefined(atividade, ['tipo_pioneiro_mes', 'tipopioneiromes']) || 'Publicador',
+        horas: Number(atividade.horas || 0),
+        bonus_horas: Number(firstDefined(atividade, ['bonus_horas', 'bonushoras']) || 0),
+        estudos: Number(atividade.estudos || 0),
+        observacoes: String(atividade.observacoes || '').trim(),
+        datacriacao: firstDefined(rawReport, ['datacriacao', 'data_criacao']),
+        data_criacao: firstDefined(rawReport, ['data_criacao', 'datacriacao'])
+    };
+};
+
+const buildRawLoadedFields = (data, designacaoAtual, situacaoDB) => ({
+    nome_completo: firstDefined(data, ['dados_pessoais.nome_completo', 'dadospessoais.nomecompleto']) || '',
+    data_nascimento: firstDefined(data, ['dados_pessoais.data_nascimento', 'dadospessoais.datanascimento']) || '',
+    genero: firstDefined(data, ['dados_pessoais.genero', 'dadospessoais.genero']) || '',
+    esperanca: firstDefined(data, ['dados_pessoais.esperanca', 'dadospessoais.esperanca']) || '',
+    outra_lingua: firstDefined(data, ['dados_pessoais.outra_lingua', 'dadospessoais.outralingua']) || '',
+    celular: firstDefined(data, ['dados_pessoais.contatos.celular', 'dadospessoais.contatos.celular']) || '',
+    email: firstDefined(data, ['dados_pessoais.contatos.email', 'dadospessoais.contatos.email']) || '',
+    endereco: firstDefined(data, ['dados_pessoais.endereco.logradouro', 'dadospessoais.endereco.logradouro']) || '',
+    emergencia_nome: firstDefined(data, ['dados_pessoais.contatos.emergencia_nome', 'dadospessoais.contatos.emergencianome']) || '',
+    emergencia_tel: firstDefined(data, ['dados_pessoais.contatos.emergencia_tel', 'dadospessoais.contatos.emergenciatel']) || '',
+    batizado: firstDefined(data, ['dados_eclesiasticos.batizado', 'dadoseclesiasticos.batizado']),
+    data_batismo: firstDefined(data, ['dados_eclesiasticos.data_batismo', 'dadoseclesiasticos.databatismo']) || '',
+    data_inicio: firstDefined(data, ['dados_eclesiasticos.data_inicio', 'dadoseclesiasticos.datainicio']) || '',
+    grupo_campo: firstDefined(data, ['dados_eclesiasticos.grupo_campo', 'dadoseclesiasticos.grupocampo']) || '',
+    pioneiro_tipo: firstDefined(data, ['dados_eclesiasticos.pioneiro_tipo', 'dadoseclesiasticos.pioneirotipo']) || '',
+    data_inicio_pioneiro: firstDefined(data, ['dados_eclesiasticos.data_designacao_pioneiro', 'dadoseclesiasticos.datadesignacaopioneiro']) || '',
+    designacao: Array.isArray(firstDefined(data, ['dados_eclesiasticos.privilegios', 'dadoseclesiasticos.privilegios'])) ? designacaoAtual : '',
+    situacao: situacaoDB ? normalizarSituacao(situacaoDB) : ''
+});
 
 export default function NovoPublicador() {
     const { isAdmin } = useAuth();
@@ -47,6 +220,7 @@ export default function NovoPublicador() {
         register,
         handleSubmit,
         watch,
+        getValues,
         reset,
         formState: { errors }
     } = useForm({
@@ -62,6 +236,10 @@ export default function NovoPublicador() {
 
     const [loading, setLoading] = useState(false);
     const [listaGrupos, setListaGrupos] = useState([]);
+    const [relatoriosImportados, setRelatoriosImportados] = useState([]);
+    const [importacaoPdfResumo, setImportacaoPdfResumo] = useState(null);
+    const [relatoriosExistentes, setRelatoriosExistentes] = useState({});
+    const [camposOriginaisImportacao, setCamposOriginaisImportacao] = useState({});
 
     // Monitora
     const situacaoAtual = normalizarSituacao(watch('situacao'));
@@ -112,78 +290,59 @@ export default function NovoPublicador() {
                     'dadoseclesiasticos.situacao'
                 ]);
 
+                const camposRaw = buildRawLoadedFields(data, designacaoAtual, situacaoDB);
+                setCamposOriginaisImportacao(camposRaw);
+
                 reset({
                     // Pessoais (novo e antigo)
-                    nome_completo: firstDefined(data, [
-                        'dados_pessoais.nome_completo',
-                        'dadospessoais.nomecompleto'
-                    ]) || '',
-                    data_nascimento: firstDefined(data, [
-                        'dados_pessoais.data_nascimento',
-                        'dadospessoais.datanascimento'
-                    ]) || null,
-                    genero: firstDefined(data, [
-                        'dados_pessoais.genero',
-                        'dadospessoais.genero'
-                    ]) || 'Masculino',
-                    esperanca: firstDefined(data, [
-                        'dados_pessoais.esperanca',
-                        'dadospessoais.esperanca'
-                    ]) || 'Outras Ovelhas',
-                    outra_lingua: firstDefined(data, [
-                        'dados_pessoais.outra_lingua',
-                        'dadospessoais.outralingua'
-                    ]) || null,
-                    celular: firstDefined(data, [
-                        'dados_pessoais.contatos.celular',
-                        'dadospessoais.contatos.celular'
-                    ]) || null,
-                    email: firstDefined(data, [
-                        'dados_pessoais.contatos.email',
-                        'dadospessoais.contatos.email'
-                    ]) || null,
-                    endereco: firstDefined(data, [
-                        'dados_pessoais.endereco.logradouro',
-                        'dadospessoais.endereco.logradouro'
-                    ]) || null,
-                    emergencia_nome: firstDefined(data, [
-                        'dados_pessoais.contatos.emergencia_nome',
-                        'dadospessoais.contatos.emergencianome'
-                    ]) || null,
-                    emergencia_tel: firstDefined(data, [
-                        'dados_pessoais.contatos.emergencia_tel',
-                        'dadospessoais.contatos.emergenciatel'
-                    ]) || null,
+                    nome_completo: camposRaw.nome_completo || '',
+                    data_nascimento: camposRaw.data_nascimento || null,
+                    genero: camposRaw.genero || 'Masculino',
+                    esperanca: camposRaw.esperanca || 'Outras Ovelhas',
+                    outra_lingua: camposRaw.outra_lingua || null,
+                    celular: camposRaw.celular || null,
+                    email: camposRaw.email || null,
+                    endereco: camposRaw.endereco || null,
+                    emergencia_nome: camposRaw.emergencia_nome || null,
+                    emergencia_tel: camposRaw.emergencia_tel || null,
 
                     // Eclesiásticos (novo e antigo)
-                    batizado: firstDefined(data, [
-                        'dados_eclesiasticos.batizado',
-                        'dadoseclesiasticos.batizado'
-                    ]) ?? true,
-                    data_batismo: firstDefined(data, [
-                        'dados_eclesiasticos.data_batismo',
-                        'dadoseclesiasticos.databatismo'
-                    ]) || null,
-                    data_inicio: firstDefined(data, [
-                        'dados_eclesiasticos.data_inicio',
-                        'dadoseclesiasticos.datainicio'
-                    ]) || null,
-                    grupo_campo: firstDefined(data, [
-                        'dados_eclesiasticos.grupo_campo',
-                        'dadoseclesiasticos.grupocampo'
-                    ]) || '',
-                    pioneiro_tipo: firstDefined(data, [
-                        'dados_eclesiasticos.pioneiro_tipo',
-                        'dadoseclesiasticos.pioneirotipo'
-                    ]) || 'Nenhum',
-                    data_inicio_pioneiro: firstDefined(data, [
-                        'dados_eclesiasticos.data_designacao_pioneiro',
-                        'dadoseclesiasticos.datadesignacaopioneiro'
-                    ]) || null,
+                    batizado: camposRaw.batizado ?? true,
+                    data_batismo: camposRaw.data_batismo || null,
+                    data_inicio: camposRaw.data_inicio || null,
+                    grupo_campo: camposRaw.grupo_campo || '',
+                    pioneiro_tipo: camposRaw.pioneiro_tipo || 'Nenhum',
+                    data_inicio_pioneiro: camposRaw.data_inicio_pioneiro || null,
 
-                    designacao: designacaoAtual,
-                    situacao: normalizarSituacao(situacaoDB || 'Ativo')
+                    designacao: camposRaw.designacao || 'Nenhuma',
+                    situacao: camposRaw.situacao || 'Ativo'
                 });
+
+                const relatoriosRef = collection(db, 'relatorios');
+                const [snapshotNovo, snapshotLegado, snapshotAntigo] = await Promise.all([
+                    getDocs(query(relatoriosRef, where('id_publicador', '==', id))),
+                    getDocs(query(relatoriosRef, where('idpublicador', '==', id))),
+                    getDocs(query(relatoriosRef, where('publicador_id', '==', id)))
+                ]);
+
+                const relatoriosMap = new Map();
+                [snapshotNovo, snapshotLegado, snapshotAntigo].forEach((snapshot) => {
+                    snapshot.forEach((relatorioSnap) => {
+                        relatoriosMap.set(relatorioSnap.id, normalizeExistingReport(relatorioSnap.data(), relatorioSnap.id));
+                    });
+                });
+
+                const relatoriosPorMes = {};
+                relatoriosMap.forEach((relatorio) => {
+                    if (relatorio.mes_referencia) {
+                        const relatorioAtual = relatoriosPorMes[relatorio.mes_referencia];
+                        const standardId = buildRelatorioId(relatorio.mes_referencia, id);
+                        if (!relatorioAtual || relatorio.__docId === standardId || relatorioAtual.__docId !== standardId) {
+                            relatoriosPorMes[relatorio.mes_referencia] = relatorio;
+                        }
+                    }
+                });
+                setRelatoriosExistentes(relatoriosPorMes);
             } catch (error) {
                 console.error('Erro ao carregar:', error);
                 toast.error('Erro ao carregar dados.');
@@ -195,7 +354,59 @@ export default function NovoPublicador() {
         carregarDados();
     }, [id, isEditMode, navigate, reset]);
 
+    const aplicarImportacaoPdf = ({ dados, relatorios, metadata, warnings, impactoRelatorios }) => {
+        const valoresAtuais = getValues();
+        const shouldOnlyFillBlank = isEditMode;
+        const camposOriginais = camposOriginaisImportacao || {};
+
+        reset({
+            ...valoresAtuais,
+            ...dados,
+            nome_completo: mergeImportedField(valoresAtuais.nome_completo, dados?.nome_completo || '', shouldOnlyFillBlank, camposOriginais.nome_completo) || '',
+            data_nascimento: mergeImportedField(valoresAtuais.data_nascimento, dados?.data_nascimento || '', shouldOnlyFillBlank, camposOriginais.data_nascimento) || '',
+            genero: mergeImportedField(valoresAtuais.genero, dados?.genero || 'Masculino', shouldOnlyFillBlank, camposOriginais.genero, 'Masculino') || 'Masculino',
+            esperanca: mergeImportedField(valoresAtuais.esperanca, dados?.esperanca || 'Outras Ovelhas', shouldOnlyFillBlank, camposOriginais.esperanca, 'Outras Ovelhas') || 'Outras Ovelhas',
+            batizado: mergeImportedField(valoresAtuais.batizado, dados?.batizado, shouldOnlyFillBlank, camposOriginais.batizado, true) ?? true,
+            data_batismo: mergeImportedField(valoresAtuais.data_batismo, dados?.data_batismo || '', shouldOnlyFillBlank, camposOriginais.data_batismo) || '',
+            data_inicio: mergeImportedField(valoresAtuais.data_inicio, dados?.data_inicio || '', shouldOnlyFillBlank, camposOriginais.data_inicio) || '',
+            grupo_campo: valoresAtuais.grupo_campo || '',
+            pioneiro_tipo: mergeImportedField(valoresAtuais.pioneiro_tipo, dados?.pioneiro_tipo || 'Nenhum', shouldOnlyFillBlank, camposOriginais.pioneiro_tipo, 'Nenhum') || 'Nenhum',
+            data_inicio_pioneiro: mergeImportedField(valoresAtuais.data_inicio_pioneiro, dados?.data_inicio_pioneiro || '', shouldOnlyFillBlank, camposOriginais.data_inicio_pioneiro) || '',
+            designacao: mergeImportedField(valoresAtuais.designacao, dados?.designacao || 'Nenhuma', shouldOnlyFillBlank, camposOriginais.designacao, 'Nenhuma') || 'Nenhuma',
+            situacao: mergeImportedField(valoresAtuais.situacao, dados?.situacao || 'Ativo', shouldOnlyFillBlank, camposOriginais.situacao, 'Ativo') || 'Ativo',
+            outra_lingua: mergeImportedField(valoresAtuais.outra_lingua, dados?.outra_lingua || '', shouldOnlyFillBlank, camposOriginais.outra_lingua) || '',
+            celular: mergeImportedField(valoresAtuais.celular, dados?.celular || '', shouldOnlyFillBlank, camposOriginais.celular) || '',
+            email: mergeImportedField(valoresAtuais.email, dados?.email || '', shouldOnlyFillBlank, camposOriginais.email) || '',
+            endereco: mergeImportedField(valoresAtuais.endereco, dados?.endereco || '', shouldOnlyFillBlank, camposOriginais.endereco) || '',
+            emergencia_nome: mergeImportedField(valoresAtuais.emergencia_nome, dados?.emergencia_nome || '', shouldOnlyFillBlank, camposOriginais.emergencia_nome) || '',
+            emergencia_tel: mergeImportedField(valoresAtuais.emergencia_tel, dados?.emergencia_tel || '', shouldOnlyFillBlank, camposOriginais.emergencia_tel) || ''
+        });
+
+        setRelatoriosImportados(Array.isArray(relatorios) ? relatorios : []);
+        setImportacaoPdfResumo({
+            fileName: metadata?.fileName || '',
+            warningsCount: Array.isArray(warnings) ? warnings.length : 0,
+            reportsCount: Array.isArray(relatorios) ? relatorios.length : 0,
+            impactoRelatorios: impactoRelatorios || buildRelatorioImpactSummary(relatorios, relatoriosExistentes)
+        });
+    };
+
     const onSubmit = async (form) => {
+        const impactoRelatorios = importacaoPdfResumo?.impactoRelatorios || buildRelatorioImpactSummary(relatoriosImportados, relatoriosExistentes);
+        if (impactoRelatorios.alterados.length > 0) {
+            const resumoAlteracoes = impactoRelatorios.alterados
+                .slice(0, 5)
+                .map((item) => `${item.mes_referencia}: ${item.diffs.join(', ')}`)
+                .join('\n');
+            const excedente = impactoRelatorios.alterados.length > 5
+                ? `\n... e mais ${impactoRelatorios.alterados.length - 5} mês(es).`
+                : '';
+            const confirmou = window.confirm(
+                `A importação vai atualizar ${impactoRelatorios.alterados.length} relatório(s) existente(s).\n\n${resumoAlteracoes}${excedente}\n\nDeseja continuar?`
+            );
+            if (!confirmou) return;
+        }
+
         setLoading(true);
         try {
             const listaPrivilegios = [];
@@ -265,14 +476,20 @@ export default function NovoPublicador() {
                 }
             };
 
+            const nomeSnapshot = dadosBaseNovo.dados_pessoais.nome_completo;
+
+            const pubRef = isEditMode
+                ? doc(db, 'publicadores', id)
+                : doc(collection(db, 'publicadores'));
+            const publicadorId = pubRef.id;
+            const batch = writeBatch(db);
+
             if (isEditMode) {
-                await updateDoc(doc(db, 'publicadores', id), {
+                batch.set(pubRef, {
                     ...dadosBaseNovo,
                     ...dadosBaseAliases,
                     atualizado_em: Timestamp.now()
-                });
-                toast.success('Cadastro atualizado com sucesso!');
-                navigate(`/publicadores/${id}`);
+                }, { merge: true });
             } else {
                 const novoRegistro = {
                     ...dadosBaseNovo,
@@ -281,8 +498,65 @@ export default function NovoPublicador() {
                     totais_anuais: {},
                     criado_em: Timestamp.now()
                 };
-                await addDoc(collection(db, 'publicadores'), novoRegistro);
-                toast.success('Publicador cadastrado com sucesso!');
+                batch.set(pubRef, novoRegistro);
+            }
+
+            const mesesImportados = new Set();
+            relatoriosImportados.forEach((report) => {
+                const participou = report.participou === true;
+                const horas = Number(report.horas || 0);
+                const estudos = Number(report.estudos || 0);
+                const observacoes = String(report.observacoes || '').trim();
+                const mesRef = String(report.mes_referencia || '').trim();
+
+                if (!mesRef) return;
+                if (!participou && horas <= 0 && estudos <= 0 && !observacoes) return;
+
+                const standardRelatorioId = buildRelatorioId(mesRef, publicadorId);
+                const existingReport = relatoriosExistentes[mesRef] || null;
+                const reportComparable = {
+                    ...report,
+                    bonus_horas: shouldApplyImportedBonus(report)
+                        ? Number(report.bonus_horas || 0)
+                        : Number(existingReport?.bonus_horas || 0)
+                };
+                const relatorioPayload = buildRelatorioPayload(publicadorId, reportComparable, nomeSnapshot, existingReport);
+                const hasLegacyDocToMigrate = existingReport?.__docId && existingReport.__docId !== standardRelatorioId;
+                const shouldWrite = !existingReport || hasLegacyDocToMigrate || !isSameReportPayload(existingReport, reportComparable);
+
+                if (!shouldWrite) return;
+
+                const relatorioRef = doc(db, 'relatorios', standardRelatorioId);
+                batch.set(relatorioRef, relatorioPayload, { merge: true });
+                if (hasLegacyDocToMigrate) {
+                    batch.delete(doc(db, 'relatorios', existingReport.__docId));
+                }
+                mesesImportados.add(mesRef);
+            });
+
+            await batch.commit();
+
+            if (mesesImportados.size > 0) {
+                await recalcularEstatisticasS1MesesClient([...mesesImportados]);
+                await sincronizarUltimoRelatorioPublicadoresClient([publicadorId]);
+                try {
+                    await sincronizarSituacaoPublicadoresClient();
+                } catch (syncError) {
+                    console.error('Erro ao sincronizar status após importação PDF:', syncError);
+                }
+            }
+
+            clearPublicadoresCache();
+
+            if (isEditMode) {
+                toast.success(mesesImportados.size > 0
+                    ? `Cadastro atualizado com ${mesesImportados.size} relatórios importados!`
+                    : 'Cadastro atualizado com sucesso!');
+                navigate(`/publicadores/${publicadorId}`);
+            } else {
+                toast.success(mesesImportados.size > 0
+                    ? `Publicador cadastrado com ${mesesImportados.size} relatórios importados!`
+                    : 'Publicador cadastrado com sucesso!');
                 navigate('/publicadores');
             }
         } catch (error) {
@@ -308,6 +582,31 @@ export default function NovoPublicador() {
                     {isEditMode ? 'Editar Cadastro' : 'Novo Registro S-21'}
                 </h1>
             </div>
+
+            <ImportadorPdfS21
+                onApply={aplicarImportacaoPdf}
+                isEditMode={isEditMode}
+                existingReports={relatoriosExistentes}
+            />
+
+            {importacaoPdfResumo && (
+                <div className="mt-4 bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-sm text-emerald-900">
+                    <p className="font-semibold">Importação pronta para revisão e salvamento.</p>
+                    <p className="mt-1">
+                        Arquivo: <span className="font-medium">{importacaoPdfResumo.fileName || 'PDF selecionado'}</span> | Relatórios aplicados: <span className="font-medium">{importacaoPdfResumo.reportsCount}</span>
+                    </p>
+                    {importacaoPdfResumo.impactoRelatorios && (
+                        <p className="mt-1">
+                            Novos: <span className="font-medium">{importacaoPdfResumo.impactoRelatorios.novos.length}</span> | Atualizações: <span className="font-medium">{importacaoPdfResumo.impactoRelatorios.alterados.length}</span> | Sem mudança: <span className="font-medium">{importacaoPdfResumo.impactoRelatorios.iguais.length}</span>
+                        </p>
+                    )}
+                    {importacaoPdfResumo.warningsCount > 0 && (
+                        <p className="mt-1 text-amber-700">
+                            Há {importacaoPdfResumo.warningsCount} alerta(s) de revisão no painel de importação.
+                        </p>
+                    )}
+                </div>
+            )}
 
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
                 {/* DADOS PESSOAIS */}

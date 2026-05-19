@@ -572,13 +572,17 @@ export default function DetalhesPublicador() {
                                             {mesesAno.map((item) => {
                                                 const chave = `${item.ano}-${item.mes.toString().padStart(2, '0')}`;
                                                 const rel = relatoriosAno[chave];
+                                                const participou = rel?.atividade?.participou === true;
+                                                const naoParticipou = !!rel && rel?.atividade?.participou === false;
 
                                                 return (
                                                     <tr key={chave} className="hover:bg-gray-50 transition group">
                                                         <td className="px-4 md:px-6 py-4 font-medium text-gray-700">{item.label}</td>
                                                         <td className="px-4 py-4 text-center">
-                                                            {rel?.atividade?.participou
+                                                            {participou
                                                                 ? <span className="text-green-600 font-bold text-xs bg-green-100 px-2 py-1 rounded">SIM</span>
+                                                                : naoParticipou
+                                                                    ? <span className="text-orange-600 font-bold text-xs bg-orange-100 px-2 py-1 rounded">NÃO</span>
                                                                 : <span className="text-gray-300">-</span>}
                                                         </td>
                                                         <td className="px-4 py-4 text-center">{rel?.atividade?.estudos > 0 ? rel.atividade.estudos : '-'}</td>

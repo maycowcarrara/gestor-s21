@@ -10,13 +10,24 @@ const DIAS_SEMANA_MAP = {
     "Sábado": 6
 };
 
+const DIA_REUNIAO_MEIO_PADRAO = "Quinta-feira";
+const DIA_REUNIAO_FIM_PADRAO = "Sábado";
+
+const resolverDiaReuniao = (diaStr, fallback) => {
+    const dia = DIAS_SEMANA_MAP[diaStr];
+    if (Number.isInteger(dia)) return dia;
+
+    console.warn(`Dia de reunião inválido recebido: "${diaStr}". Usando fallback "${fallback}".`);
+    return DIAS_SEMANA_MAP[fallback];
+};
+
 /**
  * Gera uma lista de semanas, onde cada semana tem { meio: Objeto, fim: Objeto }
  */
 export function gerarGradeSemanal(ano, mes, diaMeioStr, diaFimStr) {
     const semanas = [];
-    const diaMeio = DIAS_SEMANA_MAP[diaMeioStr];
-    const diaFim = DIAS_SEMANA_MAP[diaFimStr];
+    const diaMeio = resolverDiaReuniao(diaMeioStr, DIA_REUNIAO_MEIO_PADRAO);
+    const diaFim = resolverDiaReuniao(diaFimStr, DIA_REUNIAO_FIM_PADRAO);
 
     const dataInicial = new Date(ano, mes, 1);
     const dataFinal = new Date(ano, mes + 1, 0);

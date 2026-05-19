@@ -30,6 +30,16 @@ export const writeClientCache = (key, value) => {
     }
 };
 
+export const clearClientCache = (key) => {
+    if (typeof window === 'undefined') return;
+
+    try {
+        window.localStorage.removeItem(key);
+    } catch {
+        // Cache é opcional; falhas não devem quebrar a UI.
+    }
+};
+
 export const isClientCacheFresh = (entry, maxAgeMs) => {
     if (!entry?.savedAt) return false;
     return Date.now() - entry.savedAt <= maxAgeMs;

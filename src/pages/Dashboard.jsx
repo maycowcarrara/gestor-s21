@@ -7,6 +7,7 @@ import {
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/auth-context';
 import { isClientCacheFresh, readClientCache, writeClientCache } from '../utils/clientCache';
+import { buscarResumosAssistenciaBrutaMeses } from '../utils/assistenciaResumo';
 import {
     classificarSituacaoPublicador,
     firstDefined,
@@ -26,7 +27,7 @@ const COLORS_SITUACAO = {
 
 const COLORS_FAIXA = ['#38BDF8', '#818CF8', '#6366F1', '#4F46E5'];
 const COLORS_ESTUDOS = { pub: '#9CA3AF', aux: '#F59E0B', reg: '#10B981' };
-const DASHBOARD_CACHE_KEY = 's21_dashboard_cache_v6';
+const DASHBOARD_CACHE_KEY = 's21_dashboard_cache_v7';
 const DASHBOARD_CACHE_FRESH_MS = 1000 * 60 * 15;
 const MAX_IN_CLAUSE = 10;
 
@@ -122,17 +123,6 @@ const buscarRelatoriosPorMeses = async (meses) => {
     return [...relatoriosMap.values()];
 };
 
-const buscarEstatisticasAssistenciaPorMeses = async (meses) => {
-    const docs = await Promise.all(
-        meses.map(async (mes) => {
-            const snap = await getDoc(doc(db, 'estatisticas_assistencia', mes));
-            return [mes, snap.exists() ? snap.data() : null];
-        })
-    );
-
-    return new Map(docs);
-};
-
 const buscarEstatisticasS1PorMeses = async (meses) => {
     const docs = await Promise.all(
         meses.map(async (mes) => {
@@ -162,6 +152,8 @@ export default function Dashboard() {
 
     const [loading, setLoading] = useState(true);
     const [isMounted, setIsMounted] = useState(false);
+    const [erroCarregamento, setErroCarregamento] = useState('');
+    const [usandoCache, setUsandoCache] = useState(false);
 
     const aplicarPayload = useCallback((payload) => {
         startTransition(() => {
@@ -182,6 +174,7 @@ export default function Dashboard() {
     const carregarTudo = useCallback(async (silent = false) => {
         if (!silent) setLoading(true);
         try {
+            setErroCarregamento('');
             const hoje = new Date();
             const dataMesReferencia = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
             const anoRef = dataMesReferencia.getFullYear();
@@ -201,11 +194,26 @@ export default function Dashboard() {
                 mesesUltimos12.push({ iso, label, pub: 0, aux: 0, reg: 0, total: 0 });
             }
 
-            const [snapPubs, estatisticasAssistenciaMap, estatisticasS1Map] = await Promise.all([
-                getDocs(query(collection(db, "publicadores"))),
-                buscarEstatisticasAssistenciaPorMeses(mesesAssistencia),
+            const snapPubs = await getDocs(query(collection(db, "publicadores")));
+            const [estatisticasAssistenciaResult, estatisticasS1Result] = await Promise.allSettled([
+                buscarResumosAssistenciaBrutaMeses(mesesAssistencia),
                 buscarEstatisticasS1PorMeses(mesesUltimos12.map((mes) => mes.iso))
             ]);
+
+            const estatisticasAssistenciaMap = estatisticasAssistenciaResult.status === 'fulfilled'
+                ? estatisticasAssistenciaResult.value
+                : new Map();
+            const estatisticasS1Map = estatisticasS1Result.status === 'fulfilled'
+                ? estatisticasS1Result.value
+                : new Map();
+
+            if (estatisticasAssistenciaResult.status === 'rejected') {
+                console.warn('Nao foi possivel carregar estatisticas de assistencia do dashboard.', estatisticasAssistenciaResult.reason);
+            }
+
+            if (estatisticasS1Result.status === 'rejected') {
+                console.warn('Nao foi possivel carregar estatisticas S-1 do dashboard.', estatisticasS1Result.reason);
+            }
 
             const novosStats = {
                 totalGeral: 0, totalAtivosInativos: 0, ativos: 0, irregulares: 0,
@@ -284,46 +292,11 @@ export default function Dashboard() {
             });
 
             irregularesDetalhadosAtualizados.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
-            const mesesAssistenciaSemAgregado = mesesAssistencia.filter((mes) => !estatisticasAssistenciaMap.get(mes));
-            const fallbackAssistenciaPorMes = new Map(
-                mesesAssistenciaSemAgregado.map((mes) => [mes, { meio: [], fim: [] }])
-            );
-
-            if (mesesAssistenciaSemAgregado.length > 0) {
-                const snapAssistenciaFallback = await getDocs(query(
-                    collection(db, "assistencia"),
-                    where("data", ">=", `${mesesAssistenciaSemAgregado[0]}-01`),
-                    where("data", "<=", `${mesesAssistenciaSemAgregado[mesesAssistenciaSemAgregado.length - 1]}-31`)
-                ));
-
-                snapAssistenciaFallback.forEach((docSnap) => {
-                    const dados = docSnap.data();
-                    const mes = String(dados.data || '').slice(0, 7);
-                    if (!fallbackAssistenciaPorMes.has(mes)) return;
-
-                    const presentes = Number(dados.presentes || 0);
-                    if (presentes <= 0) return;
-
-                    const bucket = fallbackAssistenciaPorMes.get(mes);
-                    if (dados.tipoKey === 'MEIO_SEMANA') bucket.meio.push(presentes);
-                    if (dados.tipoKey === 'FIM_SEMANA') bucket.fim.push(presentes);
-                });
-            }
-
             const dadosGraficoAssistencia = mesesAssistencia.map((mes) => {
                 const agregado = estatisticasAssistenciaMap.get(mes);
                 const [ano, m] = mes.split('-');
-                const fallback = fallbackAssistenciaPorMes.get(mes) || { meio: [], fim: [] };
-                const mediaMeio = agregado
-                    ? Number(agregado.media_meio || 0)
-                    : (fallback.meio.length
-                        ? Math.round(fallback.meio.reduce((acc, valor) => acc + valor, 0) / fallback.meio.length)
-                        : 0);
-                const mediaFim = agregado
-                    ? Number(agregado.media_fim || 0)
-                    : (fallback.fim.length
-                        ? Math.round(fallback.fim.reduce((acc, valor) => acc + valor, 0) / fallback.fim.length)
-                        : 0);
+                const mediaMeio = Number(agregado?.media_meio || 0);
+                const mediaFim = Number(agregado?.media_fim || 0);
 
                 return {
                     mesLabel: `${m}/${ano.slice(2)}`,
@@ -338,19 +311,23 @@ export default function Dashboard() {
                 .filter((mes) => !estatisticasS1Map.get(mes));
 
             if (mesesEstudosSemAgregado.length > 0) {
-                const relatoriosFallback = await buscarRelatoriosPorMeses(mesesEstudosSemAgregado);
-                relatoriosFallback.forEach((relatorio) => {
-                    const mes = normalizarMesReferencia(firstDefined(relatorio, ['mes_referencia', 'mesreferencia', 'mes_ano']));
-                    if (!mes || !reportHasActivity(relatorio)) return;
+                try {
+                    const relatoriosFallback = await buscarRelatoriosPorMeses(mesesEstudosSemAgregado);
+                    relatoriosFallback.forEach((relatorio) => {
+                        const mes = normalizarMesReferencia(firstDefined(relatorio, ['mes_referencia', 'mesreferencia', 'mes_ano']));
+                        if (!mes || !reportHasActivity(relatorio)) return;
 
-                    const bucket = mesesUltimos12.find((item) => item.iso === mes);
-                    if (!bucket) return;
+                        const bucket = mesesUltimos12.find((item) => item.iso === mes);
+                        if (!bucket) return;
 
-                    const categoria = getCategoriaRelatorio(relatorio);
-                    const estudos = Number(relatorio?.atividade?.estudos || relatorio?.estudos || 0);
-                    bucket[categoria] += estudos;
-                    bucket.total = bucket.pub + bucket.aux + bucket.reg;
-                });
+                        const categoria = getCategoriaRelatorio(relatorio);
+                        const estudos = Number(relatorio?.atividade?.estudos || relatorio?.estudos || 0);
+                        bucket[categoria] += estudos;
+                        bucket.total = bucket.pub + bucket.aux + bucket.reg;
+                    });
+                } catch (error) {
+                    console.warn('Nao foi possivel calcular o fallback de estudos do dashboard.', error);
+                }
             }
 
             mesesUltimos12.forEach((bucket) => {
@@ -386,9 +363,11 @@ export default function Dashboard() {
 
             aplicarPayload(payload);
             writeClientCache(DASHBOARD_CACHE_KEY, payload);
+            setUsandoCache(false);
 
         } catch (error) {
             console.error("Erro dashboard:", error);
+            setErroCarregamento('Nao foi possivel atualizar o painel agora.');
         } finally {
             if (!silent) setLoading(false);
         }
@@ -401,6 +380,7 @@ export default function Dashboard() {
         if (cache?.value) {
             aplicarPayload(cache.value);
             setLoading(false);
+            setUsandoCache(true);
 
             if (!isClientCacheFresh(cache, DASHBOARD_CACHE_FRESH_MS)) {
                 carregarTudo(true);
@@ -420,6 +400,9 @@ export default function Dashboard() {
     const fraseIrregulares = stats.irregulares === 1
         ? `Existe ${stats.irregulares} publicador irregular`
         : `Existem ${stats.irregulares} publicadores irregulares`;
+    const fraseSemIrregulares = stats.inativos > 0
+        ? `Nenhum ativo irregular, mas há ${stats.inativos} ${stats.inativos === 1 ? 'inativo' : 'inativos'}.`
+        : 'Nenhum publicador irregular.';
 
     if (loading) return <div className="p-8 text-center text-gray-500">Carregando painel...</div>;
 
@@ -429,6 +412,20 @@ export default function Dashboard() {
                 <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><TrendingUp className="text-teocratico-blue" /> Painel de Controle</h1>
                 <p className="text-sm text-gray-500 mt-1">Visão geral e indicadores da congregação.</p>
             </div>
+
+            {erroCarregamento ? (
+                <div className="bg-amber-50 p-4 rounded-xl border border-amber-200 flex items-start gap-4 mb-8">
+                    <AlertCircle className="text-amber-600 shrink-0 mt-0.5" size={24} />
+                    <div>
+                        <h4 className="font-bold text-amber-800 text-sm">Painel sem atualização completa</h4>
+                        <p className="text-xs text-amber-700">
+                            {usandoCache
+                                ? 'Os dados exibidos podem estar desatualizados porque a atualização online falhou.'
+                                : 'Nao consegui confirmar os dados mais recentes do painel agora.'}
+                        </p>
+                    </div>
+                </div>
+            ) : null}
 
             {stats.irregulares > 0 ? (
                 <div className="bg-red-50 p-4 rounded-xl border border-red-100 flex items-start gap-4 mb-8">
@@ -451,10 +448,15 @@ export default function Dashboard() {
                         </div>
                     </div>
                 </div>
+            ) : (erroCarregamento && stats.totalAtivosInativos === 0) ? (
+                <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 flex items-center gap-4 mb-8">
+                    <AlertCircle className="text-gray-500 shrink-0" size={24} />
+                    <div><h4 className="font-bold text-gray-700 text-sm">Sem confirmacao de regularidade</h4><p className="text-xs text-gray-500">O painel nao conseguiu validar os publicadores neste carregamento.</p></div>
+                </div>
             ) : (
                 <div className="bg-green-50 p-4 rounded-xl border border-green-100 flex items-center gap-4 mb-8">
                     <Smile className="text-green-600 shrink-0" size={24} />
-                    <div><h4 className="font-bold text-green-800 text-sm">Tudo Certo!</h4><p className="text-xs text-green-600">Nenhum publicador irregular.</p></div>
+                    <div><h4 className="font-bold text-green-800 text-sm">Tudo Certo!</h4><p className="text-xs text-green-600">{fraseSemIrregulares}</p></div>
                 </div>
             )}
 
