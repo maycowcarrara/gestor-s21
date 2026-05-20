@@ -56,6 +56,60 @@ export default function DetalhesPublicador() {
         return mes >= 9 ? ano + 1 : ano; 
     };
 
+    const parseDateValue = (value) => {
+        if (!value) return null;
+
+        if (value instanceof Date) {
+            return new Date(value.getFullYear(), value.getMonth(), value.getDate(), 12);
+        }
+
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (!trimmed) return null;
+
+            if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+                return new Date(`${trimmed}T12:00:00`);
+            }
+
+            const parsed = new Date(trimmed);
+            if (!Number.isNaN(parsed.getTime())) {
+                return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 12);
+            }
+
+            return null;
+        }
+
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return null;
+        return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 12);
+    };
+
+    const formatDateBr = (value) => {
+        const parsed = parseDateValue(value);
+        return parsed ? parsed.toLocaleDateString('pt-BR') : null;
+    };
+
+    const calcularAnosDecimais = (dataInicial) => {
+        const inicio = parseDateValue(dataInicial);
+        if (!inicio) return null;
+
+        const hoje = new Date();
+        const hojeNormalizado = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate(), 12);
+        if (inicio > hojeNormalizado) return null;
+
+        const diffEmMs = hojeNormalizado.getTime() - inicio.getTime();
+        const msPorAno = 365.25 * 24 * 60 * 60 * 1000;
+        return diffEmMs / msPorAno;
+    };
+
+    const formatYearsDecimal = (value) => {
+        if (value == null) return null;
+        return `${value.toLocaleString('pt-BR', {
+            minimumFractionDigits: 1,
+            maximumFractionDigits: 1
+        })} anos`;
+    };
+
     // Normaliza publicador
     const normalizarPublicador = (raw) => {
         const nome = firstDefined(raw, ['dados_pessoais.nome_completo', 'dadospessoais.nomecompleto']) || '';
@@ -314,6 +368,14 @@ export default function DetalhesPublicador() {
     const faixaEtaria = calcularFaixaEtaria(publicador?.dados_pessoais?.data_nascimento);
     const dp = publicador.dados_pessoais || {};
     const contatos = dp.contatos || {};
+    const dataNascimento = publicador?.dados_pessoais?.data_nascimento;
+    const dataBatismo = publicador?.dados_eclesiasticos?.data_batismo;
+    const dataInicioCongregacao = publicador?.dados_eclesiasticos?.data_inicio;
+    const dataInicioPioneiro = publicador?.dados_eclesiasticos?.data_designacao_pioneiro;
+    const idadeAtual = formatYearsDecimal(calcularAnosDecimais(dataNascimento));
+    const anosBatismo = formatYearsDecimal(calcularAnosDecimais(dataBatismo));
+    const tempoCongregacao = formatYearsDecimal(calcularAnosDecimais(dataInicioCongregacao));
+    const tempoPioneiro = formatYearsDecimal(calcularAnosDecimais(dataInicioPioneiro));
 
     const celular = contatos.celular || dp.celular || dp.telefone;
     const email = contatos.email || dp.email;
@@ -448,10 +510,9 @@ export default function DetalhesPublicador() {
                             <span>
                                 Nasc:{' '}
                                 <strong>
-                                    {publicador?.dados_pessoais?.data_nascimento
-                                        ? new Date(publicador.dados_pessoais.data_nascimento + 'T12:00:00').toLocaleDateString('pt-BR')
-                                        : '--'}
+                                    {formatDateBr(dataNascimento) || '--'}
                                 </strong>
+                                {idadeAtual && <span className="text-gray-500"> ({idadeAtual})</span>}
                             </span>
                         </div>
 
@@ -460,33 +521,34 @@ export default function DetalhesPublicador() {
                             <span>
                                 Batismo:{' '}
                                 <strong>
-                                    {publicador?.dados_eclesiasticos?.data_batismo
-                                        ? new Date(publicador.dados_eclesiasticos.data_batismo + 'T12:00:00').toLocaleDateString('pt-BR')
+                                    {dataBatismo
+                                        ? formatDateBr(dataBatismo)
                                         : (publicador?.dados_eclesiasticos?.batizado ? 'Sim (s/data)' : 'Não')}
                                 </strong>
+                                {dataBatismo && anosBatismo && <span className="text-gray-500"> ({anosBatismo})</span>}
                             </span>
                         </div>
 
-                        <div className="flex items-center gap-2 text-gray-600">
-                            <Calendar size={16} className="text-green-500 shrink-0" />
-                            <span>
-                                {publicador?.dados_eclesiasticos?.pioneiro_tipo === 'Pioneiro Regular'
-                                    ? 'Início Pioneiro: '
-                                    : 'Início na Cong.: '}
-                                <strong>
-                                    {(() => {
-                                        const dataParaMostrar =
-                                            publicador?.dados_eclesiasticos?.pioneiro_tipo === 'Pioneiro Regular'
-                                                ? publicador?.dados_eclesiasticos?.data_designacao_pioneiro
-                                                : publicador?.dados_eclesiasticos?.data_inicio;
+                        {dataInicioCongregacao && (
+                            <div className="flex items-center gap-2 text-gray-600">
+                                <Calendar size={16} className="text-green-500 shrink-0" />
+                                <span>
+                                    Início na Cong.: <strong>{formatDateBr(dataInicioCongregacao)}</strong>
+                                    {tempoCongregacao && <span className="text-gray-500"> ({tempoCongregacao})</span>}
+                                </span>
+                            </div>
+                        )}
 
-                                        return dataParaMostrar
-                                            ? new Date(dataParaMostrar + 'T12:00:00').toLocaleDateString('pt-BR')
-                                            : <span className="text-gray-400 font-normal italic">--</span>;
-                                    })()}
-                                </strong>
-                            </span>
-                        </div>
+                        {dataInicioPioneiro && (
+                            <div className="flex items-center gap-2 text-gray-600">
+                                <Calendar size={16} className="text-green-500 shrink-0" />
+                                <span>
+                                    Início Pioneiro:{' '}
+                                    <strong>{formatDateBr(dataInicioPioneiro)}</strong>
+                                    {tempoPioneiro && <span className="text-gray-500"> ({tempoPioneiro})</span>}
+                                </span>
+                            </div>
+                        )}
                     </div>
 
                     <div className="space-y-2">
