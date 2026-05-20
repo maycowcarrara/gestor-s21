@@ -5,6 +5,7 @@ import { FileText, FileBarChart, CloudDownload, ChevronLeft, ChevronRight, Alert
 import { useAuth } from '../../contexts/auth-context';
 import toast from 'react-hot-toast';
 import { isPublicadoresCacheFresh, readPublicadoresCache, writePublicadoresCache } from '../../utils/publicadoresCache';
+import { publicadorContaNoMes } from '../../utils/publicadorPeriodo';
 
 import AbaControleMensal from './components/AbaControleMensal';
 import AbaTotaisS1 from './components/AbaTotaisS1';
@@ -33,6 +34,14 @@ const NotificacaoOrfaos = ({ orfaos }) => {
 };
 
 const getRelatorioPublicadorId = (relatorio) => relatorio?.id_publicador || relatorio?.idpublicador || null;
+const relatorioTemAtividade = (relatorio) => {
+    const atividade = relatorio?.atividade || {};
+    const participou = atividade.participou === true || relatorio?.participou === true;
+    const horas = Number(atividade.horas || relatorio?.horas || 0);
+    const bonus = Number(atividade.bonus_horas || atividade.bonushoras || relatorio?.bonus_horas || relatorio?.bonushoras || 0);
+    const estudos = Number(atividade.estudos || relatorio?.estudos || 0);
+    return participou || (horas + bonus) > 0 || estudos > 0;
+};
 
 export default function VisaoGeralRelatorios() {
     const { isAdmin } = useAuth();
@@ -141,21 +150,16 @@ export default function VisaoGeralRelatorios() {
             const lista = listaPublicadores.map((pub) => {
                 const relatorio = relatoriosPorPublicador[pub.id];
                 const entregue = !!relatorio;
+                const podeContarNesteMes = publicadorContaNoMes(pub, mesReferencia);
                 if (entregue) idsProcessados.add(pub.id);
+
+                if (!podeContarNesteMes) {
+                    return null;
+                }
 
                 let situacao = pub.dados_eclesiasticos.situacao;
                 if (entregue && ['Removido', 'Excluído', 'Inativo'].includes(situacao)) situacao = 'Ativo';
                 if (!entregue && ['Removido', 'Excluído', 'Inativo'].includes(situacao)) return null;
-
-                if (!entregue && pub.dados_eclesiasticos.data_inicio) {
-                    const dataInicio = new Date(
-                        pub.dados_eclesiasticos.data_inicio.includes('/')
-                            ? pub.dados_eclesiasticos.data_inicio.split('/').reverse().join('-')
-                            : pub.dados_eclesiasticos.data_inicio
-                    );
-                    const dataFimMes = new Date(`${mesReferencia}-28`);
-                    if (dataInicio > dataFimMes) return null;
-                }
 
                 if (situacao === 'Ativo' || situacao === 'Irregular') totalPotencial++;
 
@@ -173,7 +177,7 @@ export default function VisaoGeralRelatorios() {
                     grupo: pub.dados_eclesiasticos.grupo_campo || "Sem Grupo",
                     tipo,
                     entregue,
-                    pregou: entregue && (relatorio.atividade.participou || relatorio.atividade.horas > 0),
+                    pregou: entregue && relatorioTemAtividade(relatorio),
                     relatorio,
                     situacao
                 };
@@ -182,7 +186,7 @@ export default function VisaoGeralRelatorios() {
             Object.keys(relatoriosPorPublicador).forEach((id) => {
                 if (!idsProcessados.has(id)) {
                     const relatorio = relatoriosPorPublicador[id];
-                    if (relatorio.atividade?.participou || relatorio.atividade?.horas > 0) {
+                    if (relatorioTemAtividade(relatorio)) {
                         totalPotencial++;
                         novosOrfaos.push({ id, relatorio });
 

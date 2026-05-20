@@ -13,6 +13,7 @@ import {
     recalcularEstatisticasS1MesesClient,
     sincronizarUltimoRelatorioPublicadoresClient
 } from '../../../utils/relatoriosDerivados';
+import { publicadorContaNoMes } from '../../../utils/publicadorPeriodo';
 
 const normalizarNomeImportacao = (nome) => String(nome || '')
     .normalize('NFD')
@@ -93,6 +94,7 @@ export default function AbaImportacao({ mesReferencia, listaPublicadores, grupos
         const batch = writeBatch(db);
         let contagem = 0;
         const idsImportados = new Set();
+        const ignoradosPorDataInicio = [];
 
         try {
             const [anoStr, mesStr] = mesReferencia.split('-');
@@ -104,6 +106,10 @@ export default function AbaImportacao({ mesReferencia, listaPublicadores, grupos
                 if (!item.matchId) continue;
                 const publicador = listaPublicadores.find(p => p.id === item.matchId);
                 if (!publicador) continue;
+                if (!publicadorContaNoMes(publicador, mesReferencia)) {
+                    ignoradosPorDataInicio.push(publicador.dados_pessoais?.nome_completo || item.nomeCSV || item.matchId);
+                    continue;
+                }
 
                 const idRelatorio = `${mesReferencia}_${item.matchId}`;
                 const relRef = doc(db, "relatorios", idRelatorio);
@@ -180,7 +186,10 @@ export default function AbaImportacao({ mesReferencia, listaPublicadores, grupos
             toast.loading("Analisando e atualizando status dos publicadores...", { id: "sync_import" });
             try {
                 await sincronizarSituacaoPublicadoresClient();
-                toast.success(`${contagem} relatórios importados e Status atualizados!`, { id: "sync_import" });
+                const sufixoIgnorados = ignoradosPorDataInicio.length > 0
+                    ? ` ${ignoradosPorDataInicio.length} ignorado(s) por data de início.`
+                    : '';
+                toast.success(`${contagem} relatórios importados e Status atualizados!${sufixoIgnorados}`, { id: "sync_import" });
             } catch (syncError) {
                 console.error("Erro ao sincronizar status:", syncError);
                 toast.error("Importado, mas o status manual precisa ser atualizado na barra.", { id: "sync_import" });

@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { db } from '../../../config/firebase';
 import { collection, getDocs, writeBatch, query, serverTimestamp, doc } from 'firebase/firestore';
 import { buscarResumosAssistenciaBrutaMeses } from '../../../utils/assistenciaResumo';
+import { publicadorContaNoMes } from '../../../utils/publicadorPeriodo';
 
 export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadingHistorico, isAdmin, onRecalculate, dados }) {
     const [recalculando, setRecalculando] = useState(false);
@@ -45,17 +46,18 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
         carregarAssistencia();
     }, [historicoS1, mesReferencia]);
 
-    // Lista quem precisa entregar o relatório (Ativo ou Irregular)
-    const pendentesAtivos = useMemo(() => {
+    const publicadoresAtivos = useMemo(() => {
         if (!dados) return [];
-        return dados.filter(p => !p.isOrfao && (p.situacao === 'Ativo' || p.situacao === 'Irregular') && !p.entregue);
+        return dados.filter(p => !p.isOrfao && (p.situacao === 'Ativo' || p.situacao === 'Irregular'));
     }, [dados]);
 
+    // Lista quem ainda não entrou no total de "Relataram no Mês"
+    const naoRelataramAtivos = useMemo(() => {
+        return publicadoresAtivos.filter(p => !(p.entregue && p.pregou));
+    }, [publicadoresAtivos]);
+
     // Total de pessoas que DEVERIAM entregar relatório neste mês
-    const totalPotencial = useMemo(() => {
-        if (!dados) return 0;
-        return dados.filter(p => !p.isOrfao && (p.situacao === 'Ativo' || p.situacao === 'Irregular')).length;
-    }, [dados]);
+    const totalPotencial = useMemo(() => publicadoresAtivos.length, [publicadoresAtivos]);
 
     const recalcularHistoricoCompleto = async () => {
         if (!window.confirm("Isso fará uma auditoria completa de 24 meses, corrigindo duplicatas e refazendo toda a soma do S-1.\n\nDeseja continuar?")) return;
@@ -67,6 +69,7 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
             // 1. Mapear Publicadores Atuais
             const snapPubs = await getDocs(collection(db, "publicadores"));
             const idsAtivos = new Set(snapPubs.docs.map(d => d.id));
+            const publicadoresMap = new Map(snapPubs.docs.map((docSnap) => [docSnap.id, { id: docSnap.id, ...docSnap.data() }]));
 
             // 2. Buscar Relatórios Antigos (24 meses)
             const dataLimite = new Date(); dataLimite.setMonth(dataLimite.getMonth() - 24);
@@ -127,6 +130,9 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
                     }
                     fantasmas[idPub].meses.add(mes.split('-').reverse().join('/'));
                 }
+
+                const publicadorAtual = publicadoresMap.get(idPub);
+                if (publicadorAtual && !publicadorContaNoMes(publicadorAtual, mes)) return;
 
                 // --- INICIALIZA O ACUMULADOR DO MÊS SE NÃO EXISTIR ---
                 if (!acumuladorPorMes[mes]) {
@@ -240,8 +246,8 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
                     <div className="flex-1">
                         <div className="flex justify-between items-start">
                             <p className="text-sm text-gray-500 font-bold uppercase">Publicadores Ativos</p>
-                            {pendentesAtivos.length > 0 ? (
-                                <button onClick={() => setModalInfo({ tipo: 'pendentes', titulo: 'Pendentes' })} className="flex items-center gap-1 text-[10px] font-bold bg-red-100 text-red-600 px-2 py-1 rounded-full hover:bg-red-200"><Info size={12} /> Ver {pendentesAtivos.length}</button>
+                            {naoRelataramAtivos.length > 0 ? (
+                                <button onClick={() => setModalInfo({ tipo: 'pendentes', titulo: 'Não relataram no mês' })} className="flex items-center gap-1 text-[10px] font-bold bg-red-100 text-red-600 px-2 py-1 rounded-full hover:bg-red-200"><Info size={12} /> {naoRelataramAtivos.length} não relataram</button>
                             ) : (
                                 <span className="text-[10px] font-bold bg-green-100 text-green-600 px-2 py-1 rounded-full">Todos relataram</span>
                             )}
@@ -321,7 +327,7 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
                 <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setModalInfo(null)}>
                     <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
                         <div className="bg-gray-50 p-4 border-b flex justify-between items-center"><h3 className="font-bold text-gray-800 flex items-center gap-2"><Info size={20} className="text-blue-600" /> {modalInfo.titulo}</h3><button onClick={() => setModalInfo(null)}><X size={20} /></button></div>
-                        <div className="p-5 max-h-[70vh] overflow-y-auto">{modalInfo.tipo === 'texto' ? modalInfo.conteudo : <ul className="divide-y divide-gray-100">{pendentesAtivos.map(p => <li key={p.id} className="p-2 text-sm flex justify-between"><span>{p.nome}</span><span className="text-xs bg-gray-100 px-2 rounded">{p.situacao}</span></li>)}</ul>}</div>
+                        <div className="p-5 max-h-[70vh] overflow-y-auto">{modalInfo.tipo === 'texto' ? modalInfo.conteudo : <ul className="divide-y divide-gray-100">{naoRelataramAtivos.map(p => <li key={p.id} className="p-2 text-sm flex justify-between items-center gap-3"><span>{p.nome}</span><span className={`text-xs px-2 rounded ${p.entregue ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'}`}>{p.entregue ? 'Sem participação' : 'Pendente'}</span></li>)}</ul>}</div>
                         <div className="p-3 bg-gray-50 text-right border-t"><button onClick={() => setModalInfo(null)} className="px-4 py-2 bg-white border rounded text-sm font-bold">Fechar</button></div>
                     </div>
                 </div>

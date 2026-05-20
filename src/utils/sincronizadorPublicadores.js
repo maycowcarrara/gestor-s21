@@ -8,6 +8,7 @@ import {
     where
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import { publicadorContaNoMes } from './publicadorPeriodo';
 
 /**
  * Sincronizador de Publicadores (Versão Final - Produção 🚀)
@@ -76,26 +77,43 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
         console.log(`🔍 Meses aceitos para Regularidade:`, mesesParaRegularidade);
         console.log(`📅 Janela de Análise (Ativo/Inativo):`, mesesJanela);
 
-        // --- 2. MAPEAR RELATÓRIOS COM PARTICIPAÇÃO REAL ---
-        // OTIMIZAÇÃO: Busca APENAS relatórios dos meses na janela (Economiza milhares de leituras)
-        const qHistorico = query(collection(db, 'relatorios'), where('mes_referencia', 'in', mesesJanela));
-        const historicoSnap = await getDocs(qHistorico);
+        // --- 2. CARREGA PUBLICADORES PARA VALIDAR DATA DE INÍCIO ---
+        const qPubs = query(collection(db, 'publicadores'));
+        const publicadoresSnap = await getDocs(qPubs);
+        const publicadoresMap = new Map();
+        publicadoresSnap.forEach((docPub) => {
+            publicadoresMap.set(String(docPub.id).trim(), { id: docPub.id, ...docPub.data() });
+        });
+
+        // --- 3. MAPEAR RELATÓRIOS COM PARTICIPAÇÃO REAL ---
+        // Busca relatórios da janela nos formatos novo e legado.
+        const consultasHistorico = [
+            query(collection(db, 'relatorios'), where('mes_referencia', 'in', mesesJanela)),
+            query(collection(db, 'relatorios'), where('mesreferencia', 'in', mesesJanela)),
+            query(collection(db, 'relatorios'), where('mes_ano', 'in', mesesJanela.map((mesIso) => {
+                const [ano, mes] = mesIso.split('-');
+                return `${mes}/${ano}`;
+            })))
+        ];
+        const historicoSnaps = await Promise.all(consultasHistorico.map((consulta) => getDocs(consulta)));
 
         // Set contém apenas IDs que trabalharam de fato (Participou = true ou Horas > 0 ou Estudos > 0)
         const mapaParticipacao = new Set();
         let contagemRelatoriosValidos = 0;
 
-        historicoSnap.forEach(docSnap => {
-            const dados = docSnap.data();
+        historicoSnaps.forEach((historicoSnap) => historicoSnap.forEach(docSnap => {
+            const dados = docSnap.data() || {};
 
             // 🧹 LIMPEZA DE ID
-            const rawId = dados.id_publicador || dados.publicador_id || "0";
+            const rawId = dados.id_publicador || dados.idpublicador || dados.publicador_id || "0";
             const pubId = String(rawId).trim();
 
             // 🧹 LIMPEZA E NORMALIZAÇÃO DE DATA
             let dataRel = "";
             if (dados.mes_referencia) {
                 dataRel = String(dados.mes_referencia).trim();
+            } else if (dados.mesreferencia) {
+                dataRel = String(dados.mesreferencia).trim();
             } else if (dados.mes_ano) {
                 const bruta = String(dados.mes_ano).replace('/', '-').trim();
                 if (bruta.length === 7 && bruta.indexOf('-') === 2) {
@@ -110,20 +128,22 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
 
             const participouFlag = checkParticipou(dados.participou) || checkParticipou(dados.atividade?.participou);
             const horas = Number(dados.atividade?.horas || dados.horas || 0);
+            const bonus = Number(dados.atividade?.bonus_horas || dados.atividade?.bonushoras || dados.bonus_horas || dados.bonushoras || 0);
             const estudos = Number(dados.atividade?.estudos || dados.estudos || 0);
 
             // Regra de Serviço: Participou Flag TRUE **OU** Horas > 0 **OU** Estudos > 0
-            if (participouFlag || horas > 0 || estudos > 0) {
+            const publicadorAtual = publicadoresMap.get(pubId);
+            if (publicadorAtual && !publicadorContaNoMes(publicadorAtual, dataRel)) {
+                return;
+            }
+
+            if (participouFlag || (horas + bonus) > 0 || estudos > 0) {
                 mapaParticipacao.add(`${pubId}|${dataRel}`);
                 contagemRelatoriosValidos++;
             }
-        });
+        }));
 
         console.log(`📊 Relatórios Válidos encontrados na janela: ${contagemRelatoriosValidos}`);
-
-        // --- 3. ATUALIZAÇÃO DOS PUBLICADORES ---
-        const qPubs = query(collection(db, 'publicadores'));
-        const publicadoresSnap = await getDocs(qPubs);
 
         const batch = writeBatch(db);
         let atualizacoesCount = 0;

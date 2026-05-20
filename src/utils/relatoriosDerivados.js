@@ -1,6 +1,7 @@
 import {
     collection,
     doc,
+    documentId,
     getDocs,
     query,
     serverTimestamp,
@@ -8,6 +9,7 @@ import {
     writeBatch
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import { publicadorContaNoMes } from './publicadorPeriodo';
 
 const MAX_IN_CLAUSE = 10;
 
@@ -139,16 +141,38 @@ const fetchRelatoriosPorPublicadores = async (publicadorIds) => {
     return [...relatoriosMap.values()];
 };
 
+const fetchPublicadoresMap = async (publicadorIds) => {
+    const idsUnicos = unique(publicadorIds.map((id) => String(id).trim()));
+    const publicadoresMap = new Map();
+
+    if (idsUnicos.length === 0) return publicadoresMap;
+
+    for (const chunk of chunkArray(idsUnicos)) {
+        const consulta = query(collection(db, 'publicadores'), where(documentId(), 'in', chunk));
+        const snapshot = await getDocs(consulta);
+        snapshot.forEach((docSnap) => {
+            publicadoresMap.set(docSnap.id, { id: docSnap.id, ...docSnap.data() });
+        });
+    }
+
+    return publicadoresMap;
+};
+
 export const recalcularEstatisticasS1MesesClient = async (meses) => {
     const mesesUnicos = unique(meses.map(normalizarMesReferencia));
     if (mesesUnicos.length === 0) return;
 
     const relatorios = await fetchRelatoriosPorMeses(mesesUnicos);
+    const publicadoresMap = await fetchPublicadoresMap(relatorios.map(getIdPublicadorRelatorio).filter(Boolean));
     const estatisticasPorMes = new Map(mesesUnicos.map((mes) => [mes, buildS1Vazio(mes)]));
 
     relatorios.forEach((relatorio) => {
         const mes = normalizarMesReferencia(firstDefined(relatorio, ['mes_referencia', 'mesreferencia', 'mes_ano']));
         if (!mes || !estatisticasPorMes.has(mes) || !reportHasActivity(relatorio)) return;
+
+        const publicadorId = getIdPublicadorRelatorio(relatorio);
+        const publicador = publicadorId ? publicadoresMap.get(publicadorId) : null;
+        if (publicador && !publicadorContaNoMes(publicador, mes)) return;
 
         const bucket = estatisticasPorMes.get(mes);
         const categoria = getCategoriaRelatorio(relatorio);
@@ -175,12 +199,16 @@ export const sincronizarUltimoRelatorioPublicadoresClient = async (publicadorIds
     if (idsUnicos.length === 0) return;
 
     const relatorios = await fetchRelatoriosPorPublicadores(idsUnicos);
+    const publicadoresMap = await fetchPublicadoresMap(idsUnicos);
     const ultimoMesPorPublicador = new Map(idsUnicos.map((id) => [id, null]));
 
     relatorios.forEach((relatorio) => {
         const publicadorId = getIdPublicadorRelatorio(relatorio);
         const mes = normalizarMesReferencia(firstDefined(relatorio, ['mes_referencia', 'mesreferencia', 'mes_ano']));
         if (!publicadorId || !ultimoMesPorPublicador.has(publicadorId) || !mes) return;
+
+        const publicador = publicadoresMap.get(publicadorId);
+        if (publicador && !publicadorContaNoMes(publicador, mes)) return;
 
         const ultimoMesAtual = ultimoMesPorPublicador.get(publicadorId);
         if (!ultimoMesAtual || mes > ultimoMesAtual) {

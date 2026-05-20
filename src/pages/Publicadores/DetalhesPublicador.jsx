@@ -11,6 +11,7 @@ import toast from 'react-hot-toast';
 import ModalLancamento from '../../components/Relatorios/ModalLancamento';
 import { calcularFaixaEtaria } from '../../utils/helpers';
 import { useAuth } from '../../contexts/auth-context';
+import { publicadorContaNoMes } from '../../utils/publicadorPeriodo';
 
 // utils (conforme combinado)
 import { normalizarSituacao } from '../../utils/normalizadores';
@@ -215,14 +216,16 @@ export default function DetalhesPublicador() {
             setPublicador(pubNormalizado);
 
             const colRef = collection(db, 'relatorios');
-            const [snapNovo, snapLegado] = await Promise.all([
+            const [snapNovo, snapLegado, snapAntigo] = await Promise.all([
                 getDocs(query(colRef, where('idpublicador', '==', id))),
-                getDocs(query(colRef, where('id_publicador', '==', id)))
+                getDocs(query(colRef, where('id_publicador', '==', id))),
+                getDocs(query(colRef, where('publicador_id', '==', id)))
             ]);
 
             const map = new Map();
             snapNovo.forEach(d => map.set(d.id, d));
             snapLegado.forEach(d => map.set(d.id, d));
+            snapAntigo.forEach(d => map.set(d.id, d));
             const relatorios = Array.from(map.values());
 
             const dadosOrganizados = {};
@@ -554,7 +557,11 @@ export default function DetalhesPublicador() {
                             </div>
 
                             {isExpanded && (
-                                <div className="overflow-x-auto animate-fadeIn">
+                                <div className="animate-fadeIn">
+                                    <div className="px-4 py-3 bg-blue-50 border-b border-blue-100 text-xs text-blue-800">
+                                        O histórico pessoal permanece completo. Meses marcados como pré-congregação ficam visíveis para consulta e exportação, mas não entram nos relatórios históricos da congregação.
+                                    </div>
+                                    <div className="overflow-x-auto">
                                     <table className="w-full text-sm text-left whitespace-nowrap">
                                         <thead className="bg-white text-gray-600 font-medium border-b">
                                             <tr>
@@ -574,10 +581,20 @@ export default function DetalhesPublicador() {
                                                 const rel = relatoriosAno[chave];
                                                 const participou = rel?.atividade?.participou === true;
                                                 const naoParticipou = !!rel && rel?.atividade?.participou === false;
+                                                const preCongregacao = !publicadorContaNoMes(publicador, chave);
 
                                                 return (
-                                                    <tr key={chave} className="hover:bg-gray-50 transition group">
-                                                        <td className="px-4 md:px-6 py-4 font-medium text-gray-700">{item.label}</td>
+                                                    <tr key={chave} className={`transition group ${preCongregacao ? 'bg-amber-50 hover:bg-amber-100/60' : 'hover:bg-gray-50'}`}>
+                                                        <td className="px-4 md:px-6 py-4 font-medium text-gray-700">
+                                                            <div className="flex items-center gap-2">
+                                                                <span>{item.label}</span>
+                                                                {preCongregacao && (
+                                                                    <span className="text-[10px] font-bold uppercase bg-amber-100 text-amber-800 px-2 py-1 rounded-full border border-amber-200">
+                                                                        Pré-congregação
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </td>
                                                         <td className="px-4 py-4 text-center">
                                                             {participou
                                                                 ? <span className="text-green-600 font-bold text-xs bg-green-100 px-2 py-1 rounded">SIM</span>
@@ -633,6 +650,7 @@ export default function DetalhesPublicador() {
                                             </tr>
                                         </tfoot>
                                     </table>
+                                    </div>
                                 </div>
                             )}
                         </div>

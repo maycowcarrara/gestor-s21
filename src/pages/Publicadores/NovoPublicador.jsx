@@ -483,6 +483,7 @@ export default function NovoPublicador() {
                 : doc(collection(db, 'publicadores'));
             const publicadorId = pubRef.id;
             const batch = writeBatch(db);
+            const mesesExistentesDoPublicador = Object.keys(relatoriosExistentes || {}).filter(Boolean);
 
             if (isEditMode) {
                 batch.set(pubRef, {
@@ -536,14 +537,15 @@ export default function NovoPublicador() {
 
             await batch.commit();
 
-            if (mesesImportados.size > 0) {
-                await recalcularEstatisticasS1MesesClient([...mesesImportados]);
+            const mesesParaReprocessar = [...new Set([...mesesExistentesDoPublicador, ...mesesImportados])];
+            if (mesesParaReprocessar.length > 0) {
+                await recalcularEstatisticasS1MesesClient(mesesParaReprocessar);
                 await sincronizarUltimoRelatorioPublicadoresClient([publicadorId]);
-                try {
-                    await sincronizarSituacaoPublicadoresClient();
-                } catch (syncError) {
-                    console.error('Erro ao sincronizar status após importação PDF:', syncError);
-                }
+            }
+            try {
+                await sincronizarSituacaoPublicadoresClient();
+            } catch (syncError) {
+                console.error('Erro ao sincronizar status após importação PDF:', syncError);
             }
 
             clearPublicadoresCache();
