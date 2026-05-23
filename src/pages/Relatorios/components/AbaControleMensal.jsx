@@ -83,6 +83,18 @@ export default function AbaControleMensal({ dados }) {
 
     const manipularOrdenacao = (campo) => setOrdenacao(prev => ({ campo, direcao: prev.campo === campo && prev.direcao === 'asc' ? 'desc' : 'asc' }));
 
+    const renderStatusRelatorio = (pub) => (
+        pub.entregue
+            ? <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-blue-50 text-blue-700 rounded-full text-[10px] font-bold border border-blue-100">Lançado</span>
+            : <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-red-50 text-red-700 rounded-full text-[10px] font-bold border border-red-100">Pendente</span>
+    );
+
+    const renderStatusPregacao = (pub) => {
+        if (!pub.entregue) return <span className="text-[11px] font-medium text-gray-400">Aguardando relatório</span>;
+        if (pub.pregou) return <span className="text-[11px] font-medium text-green-600">Pregou no mês</span>;
+        return <span className="text-[11px] font-medium text-orange-500">Não pregou no mês</span>;
+    };
+
     return (
         <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
             <div className="mb-6 space-y-4">
@@ -138,7 +150,7 @@ export default function AbaControleMensal({ dados }) {
                                         {pub.entregue ? (pub.pregou ? <CheckCircle size={18} className="text-green-500 mx-auto" /> : <XCircle size={18} className="text-orange-400 mx-auto" />) : <Minus size={18} className="text-gray-200 mx-auto" />}
                                     </td>
                                     <td className="px-6 py-3 text-center">
-                                        {pub.entregue ? <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-blue-50 text-blue-700 rounded-full text-[10px] font-bold border border-blue-100">Lançado</span> : <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-red-50 text-red-700 rounded-full text-[10px] font-bold border border-red-100">Pendente</span>}
+                                        {renderStatusRelatorio(pub)}
                                     </td>
                                     <td className="px-6 py-3 text-center font-bold text-gray-700">{pub.entregue ? Math.floor(pub.relatorio.atividade?.horas || 0) : '-'}</td>
                                     <td className="px-6 py-3 text-center text-gray-600">{pub.entregue ? (pub.relatorio.atividade?.estudos || 0) : '-'}</td>
@@ -150,6 +162,59 @@ export default function AbaControleMensal({ dados }) {
                         </tbody>
                     </table>
                 </div>
+            </div>
+
+            <div className="md:hidden space-y-2">
+                {dadosProcessados.length === 0 ? (
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 text-center text-sm text-gray-500">
+                        Nenhum registro encontrado.
+                    </div>
+                ) : dadosProcessados.map((pub) => (
+                    <div
+                        key={pub.id}
+                        className={`bg-white rounded-xl shadow-sm border p-3 space-y-2 ${pub.isOrfao ? 'border-red-200 bg-red-50/40' : 'border-gray-200'}`}
+                    >
+                        <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                                <div className={`text-[15px] leading-tight font-semibold break-words ${pub.situacao !== 'Ativo' ? 'text-gray-400 line-through' : 'text-gray-800'} ${pub.isOrfao ? 'text-red-700 font-bold' : ''}`}>
+                                    {pub.isOrfao ? pub.nome : <Link to={`/publicadores/${pub.id}`} className="hover:text-blue-600 hover:underline">{pub.nome}</Link>}
+                                </div>
+                                <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] font-bold uppercase leading-none">
+                                    <span className="text-gray-400">{pub.grupo}</span>
+                                    <span className={getPioneiroTipoClassName(pub.tipo)}>{pub.tipo}</span>
+                                </div>
+                            </div>
+                            {renderStatusRelatorio(pub)}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-1.5 text-xs">
+                            <div className="rounded-lg bg-gray-50 border border-gray-100 px-2.5 py-1.5">
+                                <div className="text-[10px] uppercase font-bold text-gray-400">Pregação</div>
+                                <div className="mt-0.5 leading-tight">{renderStatusPregacao(pub)}</div>
+                            </div>
+                            <div className="rounded-lg bg-gray-50 border border-gray-100 px-2.5 py-1.5">
+                                <div className="text-[10px] uppercase font-bold text-gray-400">Ação</div>
+                                <div className="mt-0.5 leading-tight">
+                                    {!pub.isOrfao ? (
+                                        <Link to={`/publicadores/${pub.id}`} className={`text-[11px] font-bold transition hover:underline ${pub.entregue ? 'text-blue-600' : 'text-red-600'}`}>
+                                            {pub.entregue ? 'Ver relatório' : 'Lançar relatório'}
+                                        </Link>
+                                    ) : (
+                                        <span className="text-[11px] font-medium text-red-600">Sem cadastro ativo</span>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="rounded-lg bg-gray-50 border border-gray-100 px-2.5 py-1.5">
+                                <div className="text-[10px] uppercase font-bold text-gray-400">Horas</div>
+                                <div className="mt-0.5 text-sm font-bold text-gray-700 leading-tight">{pub.entregue ? Math.floor(pub.relatorio.atividade?.horas || 0) : '-'}</div>
+                            </div>
+                            <div className="rounded-lg bg-gray-50 border border-gray-100 px-2.5 py-1.5">
+                                <div className="text-[10px] uppercase font-bold text-gray-400">Estudos</div>
+                                <div className="mt-0.5 text-sm font-bold text-gray-700 leading-tight">{pub.entregue ? (pub.relatorio.atividade?.estudos || 0) : '-'}</div>
+                            </div>
+                        </div>
+                    </div>
+                ))}
             </div>
         </div>
     );

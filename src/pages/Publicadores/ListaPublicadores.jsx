@@ -469,7 +469,6 @@ export default function ListaPublicadores() {
                     <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
                         <Users className="text-teocratico-blue" /> Publicadores
                     </h1>
-                    <p className="text-sm text-gray-500">{publicadoresFiltrados.length} registros</p>
                 </div>
 
                 <div className="flex gap-2 w-full md:w-auto items-center">
@@ -611,11 +610,34 @@ export default function ListaPublicadores() {
                             type="button"
                             onClick={() => setMostrarFiltros((prev) => !prev)}
                             aria-expanded={mostrarFiltros}
-                            className="w-full flex items-center justify-between gap-2 md:gap-3 text-left rounded-lg hover:bg-white/70 transition px-0.5 md:px-1 py-1 md:py-2"
+                            className="w-full grid grid-cols-2 items-center gap-3 text-left rounded-lg hover:bg-white/70 transition px-0.5 md:px-1 py-1 md:py-2"
                         >
-                            <span className="text-xs md:text-sm font-semibold text-gray-700">Filtros extras</span>
+                            <div className="min-w-0">
+                                <span className="text-xs md:text-sm font-semibold text-gray-700">Publicadores: {publicadoresFiltrados.length}</span>
+                            </div>
 
-                            <div className="flex items-center gap-2 shrink-0">
+                            <div className="flex items-center justify-end gap-2 shrink-0">
+                                {temFiltroAtivo && (
+                                    <span
+                                        className="flex items-center gap-1 text-xs font-bold text-red-600 hover:text-red-800 hover:underline px-1"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            limparFiltros();
+                                        }}
+                                        role="button"
+                                        tabIndex={0}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                limparFiltros();
+                                            }
+                                        }}
+                                    >
+                                        <X size={14} /> Limpar
+                                    </span>
+                                )}
+                                <span className="text-xs md:text-sm font-semibold text-gray-700">Filtros extras</span>
                                 {temFiltroAvancadoAtivo && (
                                     <span className="text-[10px] md:text-[11px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-1 rounded-full">
                                         {filtrosAvancadosAtivosCount}
@@ -630,14 +652,6 @@ export default function ListaPublicadores() {
                         <div className={`grid transition-all duration-300 ease-out ${mostrarFiltros ? 'grid-rows-[1fr] opacity-100 mt-2 md:mt-3' : 'grid-rows-[0fr] opacity-0 mt-0'}`}>
                             <div className="overflow-hidden">
                                 <div className="pt-0.5 md:pt-1">
-                                    {temFiltroAtivo && (
-                                        <div className="flex justify-end mb-2 md:mb-3">
-                                            <button onClick={limparFiltros} className="flex items-center gap-1 text-xs font-bold text-red-600 hover:text-red-800 hover:underline px-1">
-                                                <X size={14} /> Limpar
-                                            </button>
-                                        </div>
-                                    )}
-
                             <div className="flex flex-col gap-3">
                                 <div className="flex flex-wrap gap-2 items-center">
                                     <span className="text-[10px] font-bold text-gray-400 uppercase mr-1 w-16">Teocrático:</span>
