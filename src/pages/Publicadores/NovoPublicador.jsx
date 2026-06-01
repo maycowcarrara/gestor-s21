@@ -704,6 +704,13 @@ export default function NovoPublicador() {
                                 <option value="Excluído">Excluído (Mudou-se / Falecido / Saiu)</option>
                             </select>
 
+                            <div className="mt-3 rounded-md border border-blue-200 bg-white/80 p-3 text-xs text-gray-700 space-y-1">
+                                <p className="font-semibold text-blue-900">Regra automática de irregular/inativo</p>
+                                <p>Novos publicadores e readmitidos ficam protegidos por até 6 meses apenas contra a inativação.</p>
+                                <p>A irregularidade do mês continua sendo apurada normalmente pelo relatório exigido.</p>
+                                <p>Se a pessoa veio de outra congregação e já existe histórico anterior no S-21, esse histórico tem prioridade e a carência não se aplica para inatividade.</p>
+                            </div>
+
                             {(situacaoAtual === 'Removido' || situacaoAtual === 'Excluído') && (
                                 <p className="text-xs text-gray-600 mt-2 flex items-center gap-1 font-bold">
                                     <AlertTriangle size={12} /> O publicador sairá da lista principal, mas o histórico de relatórios será preservado.
@@ -733,6 +740,9 @@ export default function NovoPublicador() {
                                     {...register('data_inicio')}
                                     className="w-full border p-2 rounded text-sm bg-white focus:ring-2 focus:ring-green-400 outline-none"
                                 />
+                                <p className="mt-2 text-[11px] text-blue-800 leading-relaxed">
+                                    Use esta data como chegada nesta congregação. Se o publicador veio de outra congregação, importe ou mantenha os relatórios anteriores para o sistema considerar o histórico completo.
+                                </p>
                             </div>
                         </div>
 

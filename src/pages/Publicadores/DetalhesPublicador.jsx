@@ -490,6 +490,9 @@ export default function DetalhesPublicador() {
                                     </span>
                                 )}
                             </div>
+                            <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                                A carência inicial impede apenas a inativação. A irregularidade mensal continua valendo normalmente, e o histórico pré-congregação salvo no S-21 também entra na classificação quando existir.
+                            </div>
                         </div>
                     </div>
 

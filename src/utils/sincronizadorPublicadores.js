@@ -8,7 +8,62 @@ import {
     where
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import { clearClientCache } from './clientCache';
 import { publicadorContaNoMes } from './publicadorPeriodo';
+import { clearPublicadoresCache } from './publicadoresCache';
+
+export const STATUS_SYNC_EVENT = 's21:status-sync-applied';
+
+const STATUS_SYNC_STATE_KEY = 's21_status_sync_state_v2';
+const DASHBOARD_CACHE_KEY = 's21_dashboard_cache_v7';
+const DIA_CORTE = 20;
+
+const readStatusSyncState = () => {
+    if (typeof window === 'undefined') return null;
+
+    try {
+        const rawValue = window.localStorage.getItem(STATUS_SYNC_STATE_KEY);
+        if (!rawValue) return null;
+
+        const parsed = JSON.parse(rawValue);
+        if (!parsed || typeof parsed !== 'object') return null;
+
+        return {
+            phaseKey: String(parsed.phaseKey || '').trim(),
+            syncedAt: Number(parsed.syncedAt || 0)
+        };
+    } catch {
+        return null;
+    }
+};
+
+const writeStatusSyncState = (phaseKey) => {
+    if (typeof window === 'undefined') return;
+
+    try {
+        window.localStorage.setItem(STATUS_SYNC_STATE_KEY, JSON.stringify({
+            phaseKey,
+            syncedAt: Date.now()
+        }));
+    } catch {
+        // Persistência auxiliar; não deve quebrar o fluxo principal.
+    }
+};
+
+const getStatusSyncPhaseKey = (baseDate = new Date()) => {
+    const dataMesPassado = new Date(baseDate.getFullYear(), baseDate.getMonth() - 1, 1);
+    const fase = baseDate.getDate() <= DIA_CORTE ? 'pre20' : 'post20';
+    return `${formatarMesISO(dataMesPassado)}:${fase}`;
+};
+
+export const invalidarCachesStatusPublicadores = (detail = {}) => {
+    clearPublicadoresCache();
+    clearClientCache(DASHBOARD_CACHE_KEY);
+
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent(STATUS_SYNC_EVENT, { detail }));
+    }
+};
 
 /**
  * Sincronizador de Publicadores (Versão Final - Produção 🚀)
@@ -23,8 +78,11 @@ import { publicadorContaNoMes } from './publicadorPeriodo';
  * - Antes do dia 20, a "cobrança" de regularidade é baseada no mês retrasado.
  * 4. EXCEÇÕES (Status Intocáveis):
  * - 'Excluído', 'Removido', 'Mudou-se' não são alterados pelo script.
- * 5. PROTEÇÃO (Imunidade para Novos):
- * - Publicador com menos de 6 meses de congregação permanece Ativo e Regular.
+ * 5. PROTEÇÃO (Imunidade para Novos/Readmitidos):
+ * - Publicador com até 6 meses de congregação não pode ser inativado.
+ * - A regularidade continua sendo apurada normalmente pelo mês exigido.
+ * - Essa carência não se aplica quando já existe histórico pré-congregação
+ *   dentro da janela analisada, como em casos de mudança de congregação.
  */
 export const sincronizarSituacaoPublicadoresClient = async () => {
     // Data Oficial de Hoje
@@ -32,8 +90,6 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
     const diaAtual = hoje.getDate();
 
     // Dia de corte para entrega dos relatórios S-21 na congregação
-    const DIA_CORTE = 20;
-
     console.log(`🚀 Iniciando Sincronização de Status e Regularidade...`);
     console.log(`📅 Dia atual: ${diaAtual}. Limite de entrega: dia ${DIA_CORTE}.`);
 
@@ -97,6 +153,8 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
         ];
         const historicoSnaps = await Promise.all(consultasHistorico.map((consulta) => getDocs(consulta)));
 
+        // Set com meses que têm qualquer histórico salvo para o publicador.
+        const mapaHistorico = new Set();
         // Set contém apenas IDs que trabalharam de fato (Participou = true ou Horas > 0 ou Estudos > 0)
         const mapaParticipacao = new Set();
         let contagemRelatoriosValidos = 0;
@@ -123,6 +181,12 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
                 }
             }
 
+            if (!pubId || !dataRel) {
+                return;
+            }
+
+            mapaHistorico.add(`${pubId}|${dataRel}`);
+
             // --- VALIDAÇÃO DE PARTICIPAÇÃO ---
             const checkParticipou = (val) => val === true || String(val).toLowerCase() === "true";
 
@@ -132,11 +196,6 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
             const estudos = Number(dados.atividade?.estudos || dados.estudos || 0);
 
             // Regra de Serviço: Participou Flag TRUE **OU** Horas > 0 **OU** Estudos > 0
-            const publicadorAtual = publicadoresMap.get(pubId);
-            if (publicadorAtual && !publicadorContaNoMes(publicadorAtual, dataRel)) {
-                return;
-            }
-
             if (participouFlag || (horas + bonus) > 0 || estudos > 0) {
                 mapaParticipacao.add(`${pubId}|${dataRel}`);
                 contagemRelatoriosValidos++;
@@ -186,7 +245,7 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
                 novaSituacao = 'Ativo';
             }
 
-            // 🛡️ 4. PROTEÇÃO INFALÍVEL PARA NOVATOS (< 6 Meses de Batismo/Congregação)
+            // 🛡️ 4. PROTEÇÃO PARA NOVOS/READMITIDOS SEM HISTÓRICO PRÉ-CONGREGAÇÃO
             const dataInicioStr = pub.dados_eclesiasticos.data_inicio || pub.dados_eclesiasticos.data_inicio_congregacao;
 
             if (dataInicioStr) {
@@ -199,11 +258,14 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
                 const dataInicio = new Date(`${dataFormatada}T12:00:00`);
 
                 const diffMeses = (hoje.getFullYear() - dataInicio.getFullYear()) * 12 + (hoje.getMonth() - dataInicio.getMonth());
+                const possuiHistoricoPreCongregacaoNaJanela = mesesJanela.some((mes) => (
+                    mapaHistorico.has(`${pid}|${mes}`) && !publicadorContaNoMes(pub, mes)
+                ));
 
-                // Regra de Ouro: Com menos de 6 meses, NÃO PODE ficar inativo pelo sistema
-                if (diffMeses <= 6) {
+                // Regra de Ouro: com até 6 meses, só bloqueia a inativação se não houver
+                // histórico pré-congregação que precise ser considerado.
+                if (diffMeses <= 6 && !possuiHistoricoPreCongregacaoNaJanela) {
                     novaSituacao = 'Ativo';
-                    novaRegularidade = 'Regular';
                 }
             }
 
@@ -223,9 +285,15 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
         if (atualizacoesCount > 0) {
             await batch.commit();
             console.log(`✅ Processo finalizado! ${atualizacoesCount} status atualizados.`);
+            invalidarCachesStatusPublicadores({
+                contagem: atualizacoesCount,
+                origem: 'sincronizacao_status'
+            });
         } else {
             console.log("✨ Tudo atualizado. Nenhuma mudança necessária.");
         }
+
+        writeStatusSyncState(getStatusSyncPhaseKey(hoje));
 
         return {
             sucesso: true,
@@ -237,6 +305,29 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
         console.error("❌ Erro na Sincronização:", error);
         throw error;
     }
+};
+
+export const sincronizarSituacaoPublicadoresSeNecessario = async () => {
+    const hoje = new Date();
+    const phaseKey = getStatusSyncPhaseKey(hoje);
+    const statusAtual = readStatusSyncState();
+
+    if (statusAtual?.phaseKey === phaseKey) {
+        return {
+            sucesso: true,
+            mensagem: 'Sincronização automática já executada neste período.',
+            contagem: 0,
+            executado: false,
+            phaseKey
+        };
+    }
+
+    const resultado = await sincronizarSituacaoPublicadoresClient();
+    return {
+        ...resultado,
+        executado: true,
+        phaseKey
+    };
 };
 
 function formatarMesISO(data) {

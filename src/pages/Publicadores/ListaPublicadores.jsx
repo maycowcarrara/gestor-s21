@@ -12,6 +12,7 @@ import { calcularFaixaEtaria } from '../../utils/helpers';
 import { useAuth } from '../../contexts/auth-context';
 import { isPublicadoresCacheFresh, readPublicadoresCache, writePublicadoresCache } from '../../utils/publicadoresCache';
 import { classificarSituacaoPublicador, normalizarPublicador, normalizarTextoBusca } from '../../utils/normalizadores';
+import { STATUS_SYNC_EVENT } from '../../utils/sincronizadorPublicadores';
 
 const adicionarTermoBusca = (termos, ...valores) => {
     valores.forEach((valor) => {
@@ -191,6 +192,17 @@ export default function ListaPublicadores() {
 
         carregarConfigGrupos();
     }, [carregarConfigGrupos, carregarPublicadores]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        const handleStatusSync = () => {
+            carregarPublicadores();
+        };
+
+        window.addEventListener(STATUS_SYNC_EVENT, handleStatusSync);
+        return () => window.removeEventListener(STATUS_SYNC_EVENT, handleStatusSync);
+    }, [carregarPublicadores]);
 
     useEffect(() => {
         if (location.pathname === '/publicadores') {

@@ -15,6 +15,7 @@ import {
     obterNomePublicador
 } from '../utils/normalizadores';
 import { normalizarMesReferencia } from '../utils/relatoriosDerivados';
+import { STATUS_SYNC_EVENT } from '../utils/sincronizadorPublicadores';
 
 const DashboardPanels = lazy(() => import('../components/dashboard/DashboardPanels'));
 
@@ -390,6 +391,17 @@ export default function Dashboard() {
 
         carregarTudo();
     }, [aplicarPayload, carregarTudo]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        const handleStatusSync = () => {
+            carregarTudo(true);
+        };
+
+        window.addEventListener(STATUS_SYNC_EVENT, handleStatusSync);
+        return () => window.removeEventListener(STATUS_SYNC_EVENT, handleStatusSync);
+    }, [carregarTudo]);
 
     const dataSituacao = useMemo(() => [
         { name: 'Ativos', value: stats.ativos, color: COLORS_SITUACAO['Ativos'] },

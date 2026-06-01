@@ -7,6 +7,7 @@ import {
 import { Toaster, toast } from 'react-hot-toast';
 import { AuthProvider } from './contexts/AuthContext';
 import { useAuth } from './contexts/auth-context';
+import { sincronizarSituacaoPublicadoresSeNecessario } from './utils/sincronizadorPublicadores';
 
 const Login = lazy(() => import('./pages/Login'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -84,6 +85,32 @@ const RouteFallback = () => (
     </div>
   </div>
 );
+
+const StatusSyncManager = () => {
+  const { isAdmin, isPermitted, loading } = useAuth();
+
+  useEffect(() => {
+    if (loading || !isPermitted || !isAdmin) return undefined;
+
+    let cancelado = false;
+
+    sincronizarSituacaoPublicadoresSeNecessario()
+      .then((resultado) => {
+        if (cancelado || !resultado?.executado || Number(resultado?.contagem || 0) <= 0) return;
+        toast.success(`${resultado.contagem} status de publicadores atualizados automaticamente.`);
+      })
+      .catch((error) => {
+        if (cancelado) return;
+        console.error('Erro ao sincronizar status automaticamente:', error);
+      });
+
+    return () => {
+      cancelado = true;
+    };
+  }, [loading, isPermitted, isAdmin]);
+
+  return null;
+};
 
 // --- 2. COMPONENTES DE ROTA ---
 
@@ -298,6 +325,7 @@ export default function App() {
       <AuthProvider>
         <Toaster position="top-right" toastOptions={{ duration: 4000 }} />
         <BrowserRouter>
+          <StatusSyncManager />
           <Suspense fallback={<RouteFallback />}>
             <Routes>
               <Route path="/login" element={<Login />} />
