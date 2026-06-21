@@ -28,7 +28,7 @@ const COLORS_SITUACAO = {
 
 const COLORS_FAIXA = ['#38BDF8', '#818CF8', '#6366F1', '#4F46E5'];
 const COLORS_ESTUDOS = { pub: '#9CA3AF', aux: '#F59E0B', reg: '#10B981' };
-const DASHBOARD_CACHE_KEY = 's21_dashboard_cache_v7';
+const DASHBOARD_CACHE_KEY = 's21_dashboard_cache_v8';
 const DASHBOARD_CACHE_FRESH_MS = 1000 * 60 * 15;
 const MAX_IN_CLAUSE = 10;
 

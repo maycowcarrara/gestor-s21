@@ -15,7 +15,7 @@ import { clearPublicadoresCache } from './publicadoresCache';
 export const STATUS_SYNC_EVENT = 's21:status-sync-applied';
 
 const STATUS_SYNC_STATE_KEY = 's21_status_sync_state_v2';
-const DASHBOARD_CACHE_KEY = 's21_dashboard_cache_v7';
+const DASHBOARD_CACHE_KEY = 's21_dashboard_cache_v8';
 const DIA_CORTE = 20;
 
 const readStatusSyncState = () => {
