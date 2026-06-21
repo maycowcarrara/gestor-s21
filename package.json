@@ -12,7 +12,11 @@
     "admin:check": "node scripts/firestore-admin-check.js",
     "admin:audit": "node scripts/firestore-audit.js",
     "admin:consistency": "node scripts/firestore-consistency-audit.js",
-    "admin:repair": "node scripts/firestore-repair-derived-data.js"
+    "admin:repair": "node scripts/firestore-repair-derived-data.js",
+    "admin:indexes:export": "node scripts/firestore-export-indexes.js",
+    "admin:compare": "node scripts/firestore-compare-projects.js",
+    "admin:migrate:dry-run": "node scripts/firestore-migrate-project.js",
+    "admin:migrate:write": "node scripts/firestore-migrate-project.js --write"
   },
   "dependencies": {
     "date-fns": "^4.1.0",

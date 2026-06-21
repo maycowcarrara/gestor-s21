@@ -26,5 +26,7 @@ dist-ssr
 # Arquivos de ambiente (segurança)
 .env
 .env.local
+.env.old
 territorios-palmas-firebase-adminsdk-fbsvc-d2ed53641e.json
 gestor-s21-firebase-adminsdk-fbsvc-cbe17b4e54.json
+gestors21-palmas-pr-firebase-adminsdk-fbsvc-1ac7bf1964.json

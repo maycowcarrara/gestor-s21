@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function emailLower() {
+      return request.auth.token.email.lower();
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isUsuarioCadastrado() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/usuarios/$(emailLower()));
+    }
+
+    function isAdmin() {
+      return isUsuarioCadastrado()
+        && get(/databases/$(database)/documents/usuarios/$(emailLower())).data.papel == 'admin';
+    }
+
+    // Colecao de usuarios (minimo necessario para o app funcionar)
+    match /usuarios/{email} {
+      allow get: if isSignedIn() && emailLower() == email;
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Configuracoes
+    match /config/{document=**} {
+      allow read: if isUsuarioCadastrado();
+      allow write: if isAdmin();
+    }
+
+    // Dados operacionais (todos leem; so admin escreve)
+    match /publicadores/{document=**} {
+      allow read: if isUsuarioCadastrado();
+      allow write: if isAdmin();
+    }
+
+    match /relatorios/{document=**} {
+      allow read: if isUsuarioCadastrado();
+      allow write: if isAdmin();
+    }
+
+    match /assistencia/{document=**} {
+      allow read: if isUsuarioCadastrado();
+      allow write: if isAdmin();
+    }
+
+    match /estatisticas_assistencia/{document=**} {
+      allow read: if isUsuarioCadastrado();
+      allow write: if isAdmin();
+    }
+
+    match /estatisticas_s1/{document=**} {
+      allow read: if isUsuarioCadastrado();
+      allow write: if isAdmin();
+    }
+
+    match /totais_mensais/{document=**} {
+      allow read: if isUsuarioCadastrado();
+      allow write: if isAdmin();
+    }
+
+    // Bloqueio padrao
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

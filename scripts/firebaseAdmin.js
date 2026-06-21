@@ -10,6 +10,7 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 
 const DEFAULT_SERVICE_ACCOUNT_FILENAMES = [
+  'gestors21-palmas-pr-firebase-adminsdk-fbsvc-1ac7bf1964.json',
   'gestor-s21-firebase-adminsdk-fbsvc-cbe17b4e54.json',
   'territorios-palmas-firebase-adminsdk-fbsvc-d2ed53641e.json',
 ];
@@ -37,6 +38,7 @@ function buildCredential() {
     const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
     return {
       credential: cert(serviceAccount),
+      projectId: serviceAccount.project_id,
       source: serviceAccountPath,
     };
   }
@@ -52,8 +54,8 @@ export function getFirebaseAdminApp() {
     return getApp();
   }
 
-  const { credential } = buildCredential();
-  return initializeApp({ credential });
+  const { credential, projectId } = buildCredential();
+  return initializeApp({ credential, projectId });
 }
 
 export function getFirebaseAdminContext() {
