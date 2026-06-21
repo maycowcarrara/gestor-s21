@@ -152,7 +152,9 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
 
                 // Validação de Participação real
                 const checkParticipou = (val) => val === true || String(val).toLowerCase() === "true";
-                const participou = checkParticipou(d.participou) || checkParticipou(d.atividade?.participou);
+                const participou = d.atividade?.participou !== undefined && d.atividade?.participou !== null && d.atividade?.participou !== ''
+                    ? checkParticipou(d.atividade?.participou)
+                    : checkParticipou(d.participou);
 
                 const horas = Number(d.atividade?.horas || d.horas || 0) + Number(d.atividade?.bonus_horas || d.atividade?.bonushoras || d.bonus_horas || d.bonushoras || 0);
                 const estudos = Number(d.atividade?.estudos || d.estudos || 0);

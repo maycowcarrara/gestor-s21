@@ -127,6 +127,7 @@ const buildRelatorioPayload = (publicadorId, report, nomeSnapshot, existingRepor
         dataatualizacao: Timestamp.now(),
         atualizadoem: Timestamp.now(),
         nome_publicador: nomeSnapshot,
+        participou: report.participou === true,
 
         id_publicador: publicadorId,
         mes_referencia: mesRef,

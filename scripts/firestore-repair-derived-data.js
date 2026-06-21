@@ -81,7 +81,9 @@ function normalizePublisherId(data) {
 
 function reportHasActivity(reportData) {
   const activity = reportData.atividade || {};
-  const participou = activity.participou === true || reportData.participou === true;
+  const participou = typeof activity.participou === 'boolean'
+    ? activity.participou
+    : reportData.participou === true;
   const horas = getReportHours(reportData);
   const estudos = Number(activity.estudos || reportData.estudos || 0);
   return participou || horas > 0 || estudos > 0;

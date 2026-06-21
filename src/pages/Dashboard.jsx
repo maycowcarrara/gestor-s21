@@ -87,7 +87,9 @@ const getReportHours = (reportData) => {
 
 const reportHasActivity = (reportData) => {
     const atividade = reportData?.atividade || {};
-    const participou = atividade.participou === true || reportData?.participou === true;
+    const participou = typeof atividade.participou === 'boolean'
+        ? atividade.participou
+        : reportData?.participou === true;
     const horasTotais = getReportHours(reportData);
     const estudos = Number(atividade.estudos || reportData?.estudos || 0);
     return participou || horasTotais > 0 || estudos > 0;

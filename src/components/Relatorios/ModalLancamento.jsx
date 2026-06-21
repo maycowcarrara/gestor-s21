@@ -193,6 +193,7 @@ export default function ModalLancamento({
                 datacriacao: isEditing ? (firstDefined(relatorioParaEditar, ['datacriacao', 'data_criacao']) || Timestamp.now()) : Timestamp.now(),
                 dataatualizacao: Timestamp.now(),
                 atualizadoem: Timestamp.now(),
+                participou: newParticipou,
 
                 atividade: {
                     participou: newParticipou,

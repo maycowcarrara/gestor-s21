@@ -190,7 +190,9 @@ export const sincronizarSituacaoPublicadoresClient = async () => {
             // --- VALIDAÇÃO DE PARTICIPAÇÃO ---
             const checkParticipou = (val) => val === true || String(val).toLowerCase() === "true";
 
-            const participouFlag = checkParticipou(dados.participou) || checkParticipou(dados.atividade?.participou);
+            const participouFlag = dados.atividade?.participou !== undefined && dados.atividade?.participou !== null && dados.atividade?.participou !== ''
+                ? checkParticipou(dados.atividade?.participou)
+                : checkParticipou(dados.participou);
             const horas = Number(dados.atividade?.horas || dados.horas || 0);
             const bonus = Number(dados.atividade?.bonus_horas || dados.atividade?.bonushoras || dados.bonus_horas || dados.bonushoras || 0);
             const estudos = Number(dados.atividade?.estudos || dados.estudos || 0);

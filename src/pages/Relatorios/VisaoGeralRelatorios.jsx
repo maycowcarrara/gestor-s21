@@ -43,7 +43,9 @@ const formatarMesLegado = (mesIso) => {
 
 const relatorioTemAtividade = (relatorio) => {
     const atividade = relatorio?.atividade || {};
-    const participou = atividade.participou === true || relatorio?.participou === true;
+    const participou = typeof atividade.participou === 'boolean'
+        ? atividade.participou
+        : relatorio?.participou === true;
     const horas = Number(atividade.horas || relatorio?.horas || 0);
     const bonus = Number(atividade.bonus_horas || atividade.bonushoras || relatorio?.bonus_horas || relatorio?.bonushoras || 0);
     const estudos = Number(atividade.estudos || relatorio?.estudos || 0);
