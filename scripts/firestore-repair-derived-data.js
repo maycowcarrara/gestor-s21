@@ -24,6 +24,55 @@ function normalizeMonth(rawValue) {
   return null;
 }
 
+function normalizeDate(rawValue) {
+  if (!rawValue) return null;
+
+  const value = String(rawValue).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(value)) {
+    const [day, month, year] = value.split('/');
+    return `${year}-${month}-${day}`;
+  }
+
+  return null;
+}
+
+function getPublisherStartDate(publicador) {
+  return normalizeDate(firstDefined(publicador, [
+    'dados_eclesiasticos.data_inicio',
+    'dados_eclesiasticos.data_inicio_congregacao',
+    'dadoseclesiasticos.datainicio',
+    'dadoseclesiasticos.datainiciocongregacao',
+    'data_inicio',
+    'data_inicio_congregacao',
+  ]));
+}
+
+function getMonthEndDate(month) {
+  const normalized = normalizeMonth(month);
+  if (!normalized) return null;
+  const [year, monthNumber] = normalized.split('-').map(Number);
+  if (!year || !monthNumber) return null;
+  return new Date(year, monthNumber, 0, 12, 0, 0, 0);
+}
+
+function toSafeDate(isoDate) {
+  if (!isoDate) return null;
+  const [year, month, day] = isoDate.split('-').map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day, 12, 0, 0, 0);
+}
+
+function publisherCountsInMonth(publicador, month) {
+  const startDate = toSafeDate(getPublisherStartDate(publicador));
+  if (!startDate) return true;
+
+  const monthEnd = getMonthEndDate(month);
+  if (!monthEnd) return true;
+
+  return startDate.getTime() <= monthEnd.getTime();
+}
+
 function normalizePublisherId(data) {
   const rawId = firstDefined(data, ['id_publicador', 'idpublicador', 'publicador_id']);
   if (!rawId) return null;
@@ -163,6 +212,11 @@ async function main() {
     db.collection('publicadores').get(),
   ]);
 
+  const publicadoresMap = new Map();
+  publicadoresSnap.forEach((docSnap) => {
+    publicadoresMap.set(docSnap.id, { id: docSnap.id, ...docSnap.data() });
+  });
+
   const recalculatedS1 = new Map();
   const latestReportByPublisher = new Map();
 
@@ -171,6 +225,11 @@ async function main() {
     const month = normalizeMonth(firstDefined(data, ['mes_referencia', 'mesreferencia', 'mes_ano']));
     const publisherId = normalizePublisherId(data);
     if (!month || !publisherId) {
+      return;
+    }
+
+    const publicador = publicadoresMap.get(publisherId);
+    if (publicador && !publisherCountsInMonth(publicador, month)) {
       return;
     }
 

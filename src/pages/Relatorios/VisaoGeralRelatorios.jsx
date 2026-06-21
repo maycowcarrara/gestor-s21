@@ -6,6 +6,7 @@ import { useAuth } from '../../contexts/auth-context';
 import toast from 'react-hot-toast';
 import { isPublicadoresCacheFresh, readPublicadoresCache, writePublicadoresCache } from '../../utils/publicadoresCache';
 import { publicadorContaNoMes } from '../../utils/publicadorPeriodo';
+import { recalcularEstatisticasS1MesesClient } from '../../utils/relatoriosDerivados';
 
 import AbaControleMensal from './components/AbaControleMensal';
 import AbaTotaisS1 from './components/AbaTotaisS1';
@@ -34,6 +35,12 @@ const NotificacaoOrfaos = ({ orfaos }) => {
 };
 
 const getRelatorioPublicadorId = (relatorio) => relatorio?.id_publicador || relatorio?.idpublicador || null;
+const formatarMesLegado = (mesIso) => {
+    if (!/^\d{4}-\d{2}$/.test(mesIso)) return mesIso;
+    const [ano, mes] = mesIso.split('-');
+    return `${mes}/${ano}`;
+};
+
 const relatorioTemAtividade = (relatorio) => {
     const atividade = relatorio?.atividade || {};
     const participou = atividade.participou === true || relatorio?.participou === true;
@@ -59,6 +66,7 @@ export default function VisaoGeralRelatorios() {
     const [historicoS1, setHistoricoS1] = useState([]);
     const [loadingHistorico, setLoadingHistorico] = useState(false);
     const [gruposConfig, setGruposConfig] = useState([]);
+    const [atualizandoMes, setAtualizandoMes] = useState(false);
 
     const carregarConfigGrupos = useCallback(async () => {
         try {
@@ -103,7 +111,7 @@ export default function VisaoGeralRelatorios() {
                 if (cache?.value?.length) {
                     console.log("Usando cache de publicadores (Economia de leituras!)");
                     startTransition(() => setListaPublicadores(cache.value));
-                    if (isPublicadoresCacheFresh(cache)) return;
+                    if (isPublicadoresCacheFresh(cache)) return cache.value;
                 }
             }
 
@@ -113,16 +121,18 @@ export default function VisaoGeralRelatorios() {
 
             startTransition(() => setListaPublicadores(lista));
             writePublicadoresCache(lista);
+            return lista;
         } catch (error) {
             console.error("Erro ao carregar publicadores:", error);
             toast.error("Erro ao carregar lista de publicadores.");
+            return null;
         } finally {
             if (!forceRefresh) setLoading(false);
         }
     }, []);
 
-    const carregarRelatoriosDoMes = useCallback(async () => {
-        if (listaPublicadores.length === 0) {
+    const carregarRelatoriosDoMes = useCallback(async (publicadoresBase = listaPublicadores) => {
+        if (publicadoresBase.length === 0) {
             setDados([]);
             setStatsS1(null);
             setOrfaos([]);
@@ -134,11 +144,19 @@ export default function VisaoGeralRelatorios() {
         setOrfaos([]);
 
         try {
-            const snapshotRelatorios = await getDocs(query(collection(db, "relatorios"), where("mes_referencia", "==", mesReferencia)));
+            const relatoriosRef = collection(db, "relatorios");
+            const [snapshotNovo, snapshotLegado, snapshotMesAno] = await Promise.all([
+                getDocs(query(relatoriosRef, where("mes_referencia", "==", mesReferencia))),
+                getDocs(query(relatoriosRef, where("mesreferencia", "==", mesReferencia))),
+                getDocs(query(relatoriosRef, where("mes_ano", "==", formatarMesLegado(mesReferencia))))
+            ]);
+            const relatoriosMap = new Map();
+            [snapshotNovo, snapshotLegado, snapshotMesAno].forEach((snapshot) => {
+                snapshot.forEach((docSnap) => relatoriosMap.set(docSnap.id, docSnap.data()));
+            });
             const relatoriosPorPublicador = {};
 
-            snapshotRelatorios.forEach((docSnap) => {
-                const relatorio = docSnap.data();
+            relatoriosMap.forEach((relatorio) => {
                 const idPublicador = getRelatorioPublicadorId(relatorio);
                 if (idPublicador) relatoriosPorPublicador[idPublicador] = relatorio;
             });
@@ -147,7 +165,7 @@ export default function VisaoGeralRelatorios() {
             const novosOrfaos = [];
             let totalPotencial = 0;
 
-            const lista = listaPublicadores.map((pub) => {
+            const lista = publicadoresBase.map((pub) => {
                 const relatorio = relatoriosPorPublicador[pub.id];
                 const entregue = !!relatorio;
                 const podeContarNesteMes = publicadorContaNoMes(pub, mesReferencia);
@@ -268,9 +286,21 @@ export default function VisaoGeralRelatorios() {
         setMesReferencia(novaData.toISOString().slice(0, 7));
     };
 
-    const atualizarCache = () => {
-        carregarPublicadoresComCache(true);
-        toast.success("Lista de publicadores atualizada!");
+    const atualizarMes = async () => {
+        setAtualizandoMes(true);
+        toast.loading(`Recalculando ${mesReferencia.split('-').reverse().join('/')}...`, { id: 'refresh_reports_month' });
+        try {
+            await recalcularEstatisticasS1MesesClient([mesReferencia]);
+            const publicadoresAtualizados = await carregarPublicadoresComCache(true);
+            await carregarRelatoriosDoMes(publicadoresAtualizados?.length ? publicadoresAtualizados : listaPublicadores);
+            if (abaAtiva === 's1') await carregarHistorico();
+            toast.success('Mês recalculado e tela atualizada.', { id: 'refresh_reports_month' });
+        } catch (error) {
+            console.error(error);
+            toast.error('Erro ao recalcular o mês.', { id: 'refresh_reports_month' });
+        } finally {
+            setAtualizandoMes(false);
+        }
     };
 
     return (
@@ -278,8 +308,13 @@ export default function VisaoGeralRelatorios() {
             <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
                 <div className="flex items-center gap-2">
                     <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><FileText className="text-teocratico-blue" /> Relatórios de Campo</h1>
-                    <button onClick={atualizarCache} className="text-gray-400 hover:text-blue-600 p-1" title="Atualizar lista de publicadores">
-                        <RefreshCw size={16} />
+                    <button
+                        onClick={atualizarMes}
+                        disabled={atualizandoMes}
+                        className="text-gray-400 hover:text-blue-600 p-1 disabled:opacity-50"
+                        title="Recalcular e atualizar o mês"
+                    >
+                        <RefreshCw size={16} className={atualizandoMes ? 'animate-spin' : ''} />
                     </button>
                 </div>
 

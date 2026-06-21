@@ -74,6 +74,7 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
             // 2. Buscar Relatórios Antigos (24 meses)
             const dataLimite = new Date(); dataLimite.setMonth(dataLimite.getMonth() - 24);
             const mesLimiteIso = dataLimite.toISOString().slice(0, 7);
+            const hojeBase = new Date();
 
             // Busca todos os relatórios
             const qRels = query(collection(db, "relatorios"));
@@ -85,6 +86,19 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
             const fantasmas = {};
             const duplicados = {};
             const chavesProcessadas = new Set();
+            const cursorMes = new Date(`${mesLimiteIso}-02`);
+            const mesFinal = new Date(hojeBase.getFullYear(), hojeBase.getMonth(), 2);
+
+            while (cursorMes <= mesFinal) {
+                const mesKey = cursorMes.toISOString().slice(0, 7);
+                acumuladorPorMes[mesKey] = {
+                    mes: mesKey,
+                    pubs: { relatorios: 0, horas: 0, estudos: 0 },
+                    aux: { relatorios: 0, horas: 0, estudos: 0 },
+                    reg: { relatorios: 0, horas: 0, estudos: 0 }
+                };
+                cursorMes.setMonth(cursorMes.getMonth() + 1);
+            }
 
             snapRels.forEach(docSnap => {
                 const d = docSnap.data();
@@ -134,15 +148,7 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
                 const publicadorAtual = publicadoresMap.get(idPub);
                 if (publicadorAtual && !publicadorContaNoMes(publicadorAtual, mes)) return;
 
-                // --- INICIALIZA O ACUMULADOR DO MÊS SE NÃO EXISTIR ---
-                if (!acumuladorPorMes[mes]) {
-                    acumuladorPorMes[mes] = {
-                        mes,
-                        pubs: { relatorios: 0, horas: 0, estudos: 0 },
-                        aux: { relatorios: 0, horas: 0, estudos: 0 },
-                        reg: { relatorios: 0, horas: 0, estudos: 0 }
-                    };
-                }
+                if (!acumuladorPorMes[mes]) return;
 
                 // Validação de Participação real
                 const checkParticipou = (val) => val === true || String(val).toLowerCase() === "true";

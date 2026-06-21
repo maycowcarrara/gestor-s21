@@ -9,16 +9,31 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const packageJsonPath = path.resolve(__dirname, '../package.json');
+const firebaseRcPath = path.resolve(__dirname, '../.firebaserc');
 const packageJsonOriginal = fs.readFileSync(packageJsonPath, 'utf8');
 
 const salvarPackageJson = (conteudo) => {
     fs.writeFileSync(packageJsonPath, `${conteudo.trimEnd()}\n`);
 };
 
+const resolverProjetoFirebase = () => {
+    const projetoViaEnv = process.env.FIREBASE_PROJECT?.trim();
+    if (projetoViaEnv) return projetoViaEnv;
+
+    const firebaseRc = JSON.parse(fs.readFileSync(firebaseRcPath, 'utf8'));
+    const projetoPadrao = firebaseRc?.projects?.default;
+    if (!projetoPadrao) {
+        throw new Error('Projeto Firebase padrão não encontrado na .firebaserc.');
+    }
+
+    return projetoPadrao;
+};
+
 // 1. Ler o package.json
 console.log('📦 Lendo versão atual...');
 const packageJson = JSON.parse(packageJsonOriginal);
 const currentVersion = packageJson.version;
+const firebaseProjectId = resolverProjetoFirebase();
 
 // 2. Incrementar versão (Patch: 1.0.0 -> 1.0.1)
 const versionParts = currentVersion.split('.').map(Number);
@@ -37,8 +52,8 @@ try {
     execSync('npm run build', { stdio: 'inherit' });
 
     // 4. Firebase Deploy
-    console.log('🔥 Enviando para o Firebase Hosting...');
-    execSync('firebase deploy', { stdio: 'inherit' });
+    console.log(`🔥 Enviando para o Firebase Hosting (${firebaseProjectId})...`);
+    execSync(`firebase deploy --project ${firebaseProjectId}`, { stdio: 'inherit' });
     deployConcluido = true;
 
     // 5. Git Commit e Push
