@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { calcularCreditoHoras, formatarObservacoesComCredito, formatarResumoTotalCredito } from './horasCredito';
 
 const limparTexto = (texto) => {
     if (!texto) return "sem_nome";
@@ -151,6 +152,8 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
         let totMeses = 0;
         let totEstudos = 0;
         let totHoras = 0;
+        let totBonus = 0;
+        let totBonusContado = 0;
 
         const addMes = (mesNum, anoRef) => {
             const chave = `${anoRef}-${mesNum.toString().padStart(2, '0')}`;
@@ -183,13 +186,15 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
                     aux = "Sim";
                 }
 
-                const hTotal = (r.atividade.horas || 0) + (r.atividade.bonus_horas || r.atividade.bonushoras || 0);
-                if (hTotal > 0) {
-                    horas = Math.floor(hTotal).toString();
-                    totHoras += hTotal;
+                const credito = calcularCreditoHoras(r.atividade);
+                totBonus += credito.bonusTotal;
+                totBonusContado += credito.bonusContado;
+                if (credito.horasPregacao > 0) {
+                    horas = Math.floor(credito.horasPregacao).toString();
+                    totHoras += credito.horasPregacao;
                 }
 
-                obs = r.atividade.observacoes || "";
+                obs = formatarObservacoesComCredito(r.atividade);
             }
 
             linhas.push([labelMes, part, est, aux, horas, obs]);
@@ -204,7 +209,14 @@ const desenharS21 = (doc, publicador, relatoriosPorAno, anosParaExibir) => {
             { content: totEstudos.toString(), styles: { fontStyle: 'bold' } },
             { content: "", styles: { fillColor: [220, 220, 220] } },
             { content: Math.floor(totHoras).toString(), styles: { fontStyle: 'bold' } },
-            ""
+            {
+                content: formatarResumoTotalCredito({
+                    horasPregacao: totHoras,
+                    bonusTotal: totBonus,
+                    bonusContado: totBonusContado
+                }),
+                styles: { fontStyle: 'bold', halign: 'left' }
+            }
         ]);
 
         autoTable(doc, {

@@ -12,6 +12,7 @@ import ModalLancamento from '../../components/Relatorios/ModalLancamento';
 import { calcularFaixaEtaria } from '../../utils/helpers';
 import { useAuth } from '../../contexts/auth-context';
 import { publicadorContaNoMes } from '../../utils/publicadorPeriodo';
+import { calcularCreditoHoras, formatarObservacoesComCredito, formatarResumoTotalCredito } from '../../utils/horasCredito';
 
 // utils (conforme combinado)
 import { normalizarSituacao } from '../../utils/normalizadores';
@@ -343,7 +344,7 @@ export default function DetalhesPublicador() {
     };
 
     const calcularTotaisAno = (ano) => {
-        let totalHoras = 0, totalBonus = 0, totalEstudos = 0, mesesRelatados = 0, contagemAuxiliar = 0;
+        let totalHoras = 0, totalBonus = 0, totalBonusContado = 0, totalEstudos = 0, mesesRelatados = 0, contagemAuxiliar = 0;
         const meses = gerarMesesAnoServico(ano);
         const relatoriosDoAno = relatoriosPorAno[ano] || {};
 
@@ -351,15 +352,17 @@ export default function DetalhesPublicador() {
             const chave = `${item.ano}-${item.mes.toString().padStart(2, '0')}`;
             const rel = relatoriosDoAno[chave];
             if (rel) {
+                const credito = calcularCreditoHoras(rel.atividade);
                 if (rel.atividade?.participou) mesesRelatados++;
-                totalHoras += (rel.atividade?.horas || 0);
-                totalBonus += (rel.atividade?.bonus_horas || rel.atividade?.bonushoras || 0);
+                totalHoras += credito.horasPregacao;
+                totalBonus += credito.bonusTotal;
+                totalBonusContado += credito.bonusContado;
                 totalEstudos += (rel.atividade?.estudos || 0);
                 if (rel.atividade?.pioneiro_auxiliar_mes || rel.atividade?.pioneiroauxiliarmes) contagemAuxiliar++;
             }
         });
 
-        return { totalHoras, totalBonus, totalEstudos, mesesRelatados, contagemAuxiliar };
+        return { totalHoras, totalBonus, totalBonusContado, totalEstudos, mesesRelatados, contagemAuxiliar };
     };
 
     if (loading) return <div className="p-8 text-center">Carregando...</div>;
@@ -600,6 +603,11 @@ export default function DetalhesPublicador() {
             <div className="space-y-6">
                 {anosParaExibir.map((ano) => {
                     const totaisAno = calcularTotaisAno(ano);
+                    const resumoTotalCredito = formatarResumoTotalCredito({
+                        horasPregacao: totaisAno.totalHoras,
+                        bonusTotal: totaisAno.totalBonus,
+                        bonusContado: totaisAno.totalBonusContado
+                    });
                     const mesesAno = gerarMesesAnoServico(ano);
                     const relatoriosAno = relatoriosPorAno[ano] || {};
                     const isExpanded = anosExpandidos[ano] !== false;
@@ -647,6 +655,8 @@ export default function DetalhesPublicador() {
                                                 const participou = rel?.atividade?.participou === true;
                                                 const naoParticipou = !!rel && rel?.atividade?.participou === false;
                                                 const preCongregacao = !publicadorContaNoMes(publicador, chave);
+                                                const credito = rel ? calcularCreditoHoras(rel.atividade) : null;
+                                                const observacoesComCredito = rel ? formatarObservacoesComCredito(rel.atividade) : '';
 
                                                 return (
                                                     <tr key={chave} className={`transition group ${preCongregacao ? 'bg-amber-50 hover:bg-amber-100/60' : 'hover:bg-gray-50'}`}>
@@ -671,18 +681,11 @@ export default function DetalhesPublicador() {
                                                         <td className="px-4 py-4 text-center">{(rel?.atividade?.pioneiro_auxiliar_mes || rel?.atividade?.pioneiroauxiliarmes) ? '✅' : ''}</td>
                                                         <td className="px-4 py-4 text-center font-bold text-gray-800">
                                                             {rel ? (
-                                                                <div className="flex items-center justify-center gap-1">
-                                                                    <span>{Math.floor(rel.atividade?.horas || 0)}</span>
-                                                                    {(rel.atividade?.bonus_horas || rel.atividade?.bonushoras || 0) > 0 && (
-                                                                        <span className="text-yellow-600 text-xs bg-yellow-100 px-1 rounded" title="Bônus">
-                                                                            + {Math.floor(rel.atividade?.bonus_horas || rel.atividade?.bonushoras || 0)}
-                                                                        </span>
-                                                                    )}
-                                                                </div>
+                                                                <span>{Math.floor(credito.horasPregacao)}</span>
                                                             ) : '-'}
                                                         </td>
-                                                        <td className="px-6 py-4 text-gray-500 text-xs max-w-[150px] truncate" title={rel?.atividade?.observacoes}>
-                                                            {rel?.atividade?.observacoes || ''}
+                                                        <td className="px-6 py-4 text-gray-500 text-xs max-w-[220px] truncate" title={observacoesComCredito}>
+                                                            {observacoesComCredito}
                                                         </td>
                                                         <td className="px-4 py-4 text-center">
                                                             {isAdmin && rel && (
@@ -708,9 +711,10 @@ export default function DetalhesPublicador() {
                                                 <td className="px-4 py-3 text-center">{totaisAno.contagemAuxiliar}</td>
                                                 <td className="px-4 py-3 text-center text-blue-700 text-base">
                                                     {Math.floor(totaisAno.totalHoras)}
-                                                    {totaisAno.totalBonus > 0 && <span className="text-yellow-600 text-xs ml-1">+{Math.floor(totaisAno.totalBonus)}</span>}
                                                 </td>
-                                                <td></td>
+                                                <td className="px-6 py-3 text-xs text-gray-600 font-medium">
+                                                    {resumoTotalCredito}
+                                                </td>
                                                 <td></td>
                                             </tr>
                                         </tfoot>

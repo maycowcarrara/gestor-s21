@@ -10,6 +10,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { publicadorContaNoMes } from './publicadorPeriodo';
+import { calcularCreditoHoras } from './horasCredito';
 
 const MAX_IN_CLAUSE = 10;
 
@@ -64,10 +65,7 @@ const formatarMesLegado = (mesIso) => {
 };
 
 const getReportHours = (reportData) => {
-    const atividade = reportData?.atividade || {};
-    const horas = Number(atividade.horas || reportData?.horas || 0);
-    const bonus = Number(firstDefined(atividade, ['bonus_horas', 'bonushoras']) || firstDefined(reportData, ['bonus_horas', 'bonushoras']) || 0);
-    return horas + bonus;
+    return calcularCreditoHoras(reportData).horasPregacao;
 };
 
 const reportHasActivity = (reportData) => {

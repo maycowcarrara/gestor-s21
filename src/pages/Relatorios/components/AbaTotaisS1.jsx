@@ -5,6 +5,7 @@ import { db } from '../../../config/firebase';
 import { collection, getDocs, writeBatch, query, serverTimestamp, doc } from 'firebase/firestore';
 import { buscarResumosAssistenciaBrutaMeses } from '../../../utils/assistenciaResumo';
 import { publicadorContaNoMes } from '../../../utils/publicadorPeriodo';
+import { calcularCreditoHoras } from '../../../utils/horasCredito';
 
 export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadingHistorico, isAdmin, onRecalculate, dados }) {
     const [recalculando, setRecalculando] = useState(false);
@@ -156,7 +157,7 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
                     ? checkParticipou(d.atividade?.participou)
                     : checkParticipou(d.participou);
 
-                const horas = Number(d.atividade?.horas || d.horas || 0) + Number(d.atividade?.bonus_horas || d.atividade?.bonushoras || d.bonus_horas || d.bonushoras || 0);
+                const horas = calcularCreditoHoras(d).horasPregacao;
                 const estudos = Number(d.atividade?.estudos || d.estudos || 0);
 
                 if (!participou && horas === 0 && estudos === 0) return;
@@ -215,7 +216,7 @@ export default function AbaTotaisS1({ statsS1, historicoS1, mesReferencia, loadi
     const StatCardS1 = ({ titulo, dados, cor, icone, infoKey }) => {
         const abrirInfo = () => {
             const mensagens = {
-                pubs: "Publicadores batizados e não batizados. Inclui horas de crédito (idosos/enfermos).",
+                pubs: "Publicadores batizados e não batizados. As horas de crédito aprovadas ficam nas observações do relatório.",
                 aux: "Pioneiros Auxiliares do mês (requisito de 15, 30 horas ou indeterminado).",
                 reg: "Pioneiros Regulares, Especiais e Missionários ativos."
             };

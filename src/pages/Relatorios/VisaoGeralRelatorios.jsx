@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { isPublicadoresCacheFresh, readPublicadoresCache, writePublicadoresCache } from '../../utils/publicadoresCache';
 import { publicadorContaNoMes } from '../../utils/publicadorPeriodo';
 import { recalcularEstatisticasS1MesesClient } from '../../utils/relatoriosDerivados';
+import { calcularCreditoHoras } from '../../utils/horasCredito';
 
 import AbaControleMensal from './components/AbaControleMensal';
 import AbaTotaisS1 from './components/AbaTotaisS1';
@@ -244,8 +245,7 @@ export default function VisaoGeralRelatorios() {
 
             lista.forEach((item) => {
                 if (item.entregue && item.pregou) {
-                    const bonus = Number(item.relatorio.atividade?.bonus_horas || item.relatorio.atividade?.bonushoras || 0);
-                    const horas = Number(item.relatorio.atividade?.horas || 0) + bonus;
+                    const horas = calcularCreditoHoras(item.relatorio).horasPregacao;
                     const estudos = Number(item.relatorio.atividade?.estudos || 0);
                     const isRegular = ['Pioneiro Regular', 'Pioneiro Especial', 'Missionário'].includes(item.tipo);
                     const categoria = isRegular ? 'reg' : (item.tipo === 'Pioneiro Auxiliar' ? 'aux' : 'pubs');
